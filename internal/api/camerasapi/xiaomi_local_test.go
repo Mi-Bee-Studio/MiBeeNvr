@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 // Tests for xiaomi_local.go (#578) — pure helper surface only: the cloud
 // sign-in/device-list paths dial the Xiaomi cloud and are not CI-hermetic.
@@ -76,4 +76,33 @@ func TestXiaomiLocal_CheckVendorGuards(t *testing.T) {
 	cfg := &config.Config{}
 	auth := NewLocalXiaomiAuth(cfg)
 	require.NoError(t, auth.SetCloudConfig(context.Background(), "u", "t", "de"))
+}
+
+func TestXiaomiLocalPurePaths(t *testing.T) {
+	t.Parallel()
+	t.Run("isXiaomiCameraModel", func(t *testing.T) {
+		t.Parallel()
+		require.True(t, isXiaomiCameraModel("isa.camera.hlc8"))
+		require.True(t, isXiaomiCameraModel("lumi.cateye.v1"))
+		require.True(t, isXiaomiCameraModel("roborock.feeder.v1"))
+		require.False(t, isXiaomiCameraModel("isa.airpurifier.v3"))
+	})
+	t.Run("sessionToResult nil", func(t *testing.T) {
+		t.Parallel()
+		require.Nil(t, sessionToResult(nil))
+	})
+	t.Run("check vendor without config", func(t *testing.T) {
+		t.Parallel()
+		a := &LocalXiaomiAuth{}
+		_, err := a.CheckVendor(context.TODO(), "did-1")
+		require.ErrorContains(t, err, "xiaomi config not available")
+	})
+}
+
+func TestReasonOrOK(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "connection successful", onvifStreamProbe{StreamOK: true}.reasonOrOK())
+	require.Equal(t, "stream accessible (declared codec corrected by RTSP probe)",
+		onvifStreamProbe{StreamOK: true, CodecLie: true}.reasonOrOK())
+	require.Equal(t, "dial refused", onvifStreamProbe{Reason: "dial refused"}.reasonOrOK())
 }

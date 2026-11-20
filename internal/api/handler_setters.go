@@ -9,9 +9,11 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
@@ -134,3 +136,41 @@ func (h *Handler) SetRelayManager(mgr *relay.Manager) {
 }
 
 // --- Per-camera streaming protocols endpoint ---
+
+// SetOnboardingService wires the zero-touch camera onboarding service.
+func (h *Handler) SetOnboardingService(svc OnboardingService) {
+	h.onboarding = svc
+}
+
+func (h *Handler) SetGB28181Cascade(s GB28181CascadeStatus) {
+	h.gb28181Cascade = s
+}
+
+func (h *Handler) SetGB28181Timezone(loc *time.Location) {
+	h.gb28181Records.SetTimezone(loc)
+}
+
+func (h *Handler) SetGB28181Inviter(s GB28181InviteSender) {
+	h.gb28181Inviter = s
+}
+
+func (h *Handler) SetGB28181Sessions(fn func() ([]GB28181SessionStatus, int64)) {
+	h.gb28181Sessions = fn
+}
+
+func (h *Handler) SetGB28181ByeSender(s GB28181ByeSender) {
+	h.gb28181Bye = s
+}
+
+func (h *Handler) SetGB28181DeviceMedia(s GB28181DeviceMedia) {
+	h.gb28181Media = s
+	h.gb28181Records.SetMedia(s)
+}
+
+func (h *Handler) SetGB28181Commander(c GBCommander) {
+	h.gb28181Commander = c
+}
+
+func (h *Handler) SetGB28181SnapshotManager(m *gb28181.SnapshotSessionManager) {
+	h.gb28181SnapMgr = m
+}

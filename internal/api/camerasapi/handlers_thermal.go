@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"io"
@@ -24,11 +24,11 @@ import (
 // credentials) becomes {"grid":{"cols","rows","values"},"max","min",
 // "visible_rect"} — the native matrix (160×120 on a DS-2TB2617) plus the
 // device's thermal→visible registration for the dual-pane mirror.
-func (h *Handler) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	row, err := h.db.GetCamera(ctx, id)
+	row, err := s.deps.DB.GetCamera(ctx, id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
@@ -40,7 +40,7 @@ func (h *Handler) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
 	// imaging_type lives in the yaml config (the DB row never carries it),
 	// so both the thermal gate and the readout source read from there —
 	// the same source of truth the boot-wired poller uses.
-	src, ok := thermal.SourceForCamera(thermalCameraConfig(h.config, id))
+	src, ok := thermal.SourceForCamera(thermalCameraConfig(s.deps.Config, id))
 	if !ok {
 		WriteError(w, http.StatusNotFound, "no thermal readout configured")
 		return
@@ -87,11 +87,11 @@ func (h *Handler) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
 // temperature curve (#38 Tier 2): minute-aggregated scene extremes stored by
 // the thermal-history service, decimated to at most `points` buckets for
 // charting. Thermal cameras only (same config gate as the frame proxy).
-func (h *Handler) handleThermalHistory(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleThermalHistory(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	if !thermalCameraIs(h.config, id) {
+	if !thermalCameraIs(s.deps.Config, id) {
 		WriteError(w, http.StatusNotFound, "not a thermal camera")
 		return
 	}
@@ -128,7 +128,7 @@ func (h *Handler) handleThermalHistory(w http.ResponseWriter, r *http.Request) {
 		points = n
 	}
 
-	rows, err := h.db.QueryThermalReadings(ctx, id, from, to)
+	rows, err := s.deps.DB.QueryThermalReadings(ctx, id, from, to)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to query thermal history")
 		return

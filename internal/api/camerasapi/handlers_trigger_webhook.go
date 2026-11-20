@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"crypto/hmac"
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
-	"github.com/go-chi/chi/v5"
 )
 
 // Webhook trigger endpoint (issue #709): the HTTP counterpart of the MQTT
@@ -60,26 +59,15 @@ var webhookActions = map[string]bool{
 // SetTriggerDispatcher wires the trigger action dispatcher (the same
 // func(cameraID, action) the MQTT client uses — see mqtt.NewActionDispatcher).
 // Nil disables the endpoint (503 on call, route still mounted).
-func (h *Handler) SetTriggerDispatcher(dispatch func(cameraID, action string, duration time.Duration)) {
-	h.triggerDispatcher = dispatch
+func (s *server) SetTriggerDispatcher(dispatch func(cameraID, action string, duration time.Duration)) {
+	s.deps.TriggerDispatcher = dispatch
 }
 
 // registerTriggerRoutes mounts the webhook endpoint when the config enables
 // it. Mounted inside the rate-limited public group (60 req/min per IP), same
 // exposure class as /api/health.
-func (h *Handler) registerTriggerRoutes(r chi.Router) {
-	if h.config == nil || !h.config.Trigger.Webhook.Enabled {
-		return
-	}
-	if strings.TrimSpace(h.config.Trigger.Webhook.Secret) == "" {
-		// Validate() rejects this combination at load; guard anyway so a
-		// hand-wired Handler in tests can't mount an unverifiable endpoint.
-		return
-	}
-	r.Post("/api/trigger/webhook/{cameraID}", h.handleTriggerWebhook)
-}
 
-func (h *Handler) handleTriggerWebhook(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleTriggerWebhook(w http.ResponseWriter, r *http.Request) {
 	cameraID := r.PathValue("cameraID")
 	action := r.URL.Query().Get("action")
 	remote := r.RemoteAddr
@@ -93,8 +81,8 @@ func (h *Handler) handleTriggerWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secret := h.config.Trigger.Webhook.Secret
-	window := time.Duration(h.config.Trigger.Webhook.ReplayWindow()) * time.Second
+	secret := s.deps.Config.Trigger.Webhook.Secret
+	window := time.Duration(s.deps.Config.Trigger.Webhook.ReplayWindow()) * time.Second
 	if err := verifyWebhookSignature(secret, r.Header.Get("X-MiBee-Signature"), body, time.Now(), window); err != nil {
 		// Signature failures are the audit trail for unauthorized trigger
 		// attempts — log with source IP, respond uniformly 401 (no oracle
@@ -111,13 +99,13 @@ func (h *Handler) handleTriggerWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.triggerDispatcher == nil {
+	if s.deps.TriggerDispatcher == nil {
 		webhookLogger.Error("webhook trigger dropped: no dispatcher wired", "camera_id", cameraID, "remote", remote)
 		WriteError(w, http.StatusServiceUnavailable, "trigger dispatcher not available")
 		return
 	}
 
-	if h.camMgr == nil || h.camMgr.GetCameraConfig(cameraID) == nil {
+	if s.deps.Cam == nil || s.deps.Cam.GetCameraConfig(cameraID) == nil {
 		// Unknown camera AFTER signature verification: the requester is
 		// authenticated, so a plain 404 is the honest answer (no existence
 		// oracle for unsigned callers — those were already 401'd above).
@@ -128,7 +116,7 @@ func (h *Handler) handleTriggerWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// The dispatcher is internally async (per-action goroutine, 30s bounded),
 	// so this returns immediately; outcomes land in the structured log below.
-	h.triggerDispatcher(cameraID, action, 0)
+	s.deps.TriggerDispatcher(cameraID, action, 0)
 	webhookLogger.Info("webhook trigger accepted",
 		"camera_id", cameraID, "action", action, "remote", remote, "body_bytes", len(body))
 	writeJSON(w, http.StatusAccepted, map[string]any{

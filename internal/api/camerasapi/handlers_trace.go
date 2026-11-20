@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"log/slog"
@@ -22,10 +22,10 @@ import (
 // The window auto-expires (default 30s, max 5m) so per-frame logging can
 // never be left on by accident. DELETE ends it early. GET reports the
 // remaining window without changing it.
-func (h *Handler) handleCameraTrace(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCameraTrace(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	if cam, err := h.db.GetCamera(r.Context(), id); err != nil {
+	if cam, err := s.deps.DB.GetCamera(r.Context(), id); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	} else if cam == nil {

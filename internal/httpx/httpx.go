@@ -125,3 +125,16 @@ func ValidateIP(ip string) bool {
 	}
 	return net.ParseIP(ip) != nil
 }
+
+// WriteSSEEvent emits one server-sent event frame. Byte concatenation
+// replaces fmt.Fprintf's format parsing + reflection on the per-event path
+// (#875 L2); the frame layout is identical.
+func WriteSSEEvent(w http.ResponseWriter, topic string, data []byte) {
+	b := make([]byte, 0, len("event: \ndata: \n\n")+len(topic)+len(data))
+	b = append(b, "event: "...)
+	b = append(b, topic...)
+	b = append(b, "\ndata: "...)
+	b = append(b, data...)
+	b = append(b, "\n\n"...)
+	_, _ = w.Write(b)
+}

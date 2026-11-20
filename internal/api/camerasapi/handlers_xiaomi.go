@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"context"
@@ -6,8 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-
-	"github.com/go-chi/chi/v5"
+	"net/url"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -15,8 +14,8 @@ import (
 
 // --- Xiaomi cloud endpoints ---
 
-func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
-	if h.cloudProxy == nil {
+func (s *server) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CloudProxy == nil {
 		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
@@ -40,7 +39,7 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		region = "cn"
 	}
 
-	result, verification, err := h.cloudProxy.SignIn(r.Context(), req.Username, req.Password, region)
+	result, verification, err := s.deps.CloudProxy.SignIn(r.Context(), req.Username, req.Password, region)
 	if err != nil {
 		// 502, NOT 401: the caller's NVR session is fine — the UPSTREAM cloud
 		// rejected the Xiaomi credentials. 401 here made the frontend's global
@@ -55,7 +54,7 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.saveXiaomiToken(result)
+	s.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -63,8 +62,8 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
-	if h.cloudProxy == nil {
+func (s *server) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CloudProxy == nil {
 		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
@@ -82,7 +81,7 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, verification, err := h.cloudProxy.SubmitCaptcha(r.Context(), req.SessionID, req.CaptchaCode)
+	result, verification, err := s.deps.CloudProxy.SubmitCaptcha(r.Context(), req.SessionID, req.CaptchaCode)
 	if err != nil {
 		// 502 not 401 — upstream rejection, the NVR session is fine (#1014).
 		WriteError(w, http.StatusBadGateway, fmt.Sprintf("captcha verification failed: %v", err))
@@ -94,7 +93,7 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.saveXiaomiToken(result)
+	s.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -102,8 +101,8 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
-	if h.cloudProxy == nil {
+func (s *server) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CloudProxy == nil {
 		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
@@ -121,7 +120,7 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, verification, err := h.cloudProxy.SubmitVerify(r.Context(), req.SessionID, req.Ticket)
+	result, verification, err := s.deps.CloudProxy.SubmitVerify(r.Context(), req.SessionID, req.Ticket)
 	if err != nil {
 		// 502 not 401 — upstream rejection, the NVR session is fine (#1014).
 		WriteError(w, http.StatusBadGateway, fmt.Sprintf("verification failed: %v", err))
@@ -133,7 +132,7 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.saveXiaomiToken(result)
+	s.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -141,13 +140,13 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
-	if h.cloudProxy == nil {
+func (s *server) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CloudProxy == nil {
 		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
 
-	if h.config == nil || h.config.Xiaomi.Token == "" {
+	if s.deps.Config == nil || s.deps.Config.Xiaomi.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"devices": []CloudDeviceInfo{},
 			"message": "not authenticated",
@@ -155,7 +154,7 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devices, err := h.cloudProxy.ListDevices(r.Context())
+	devices, err := s.deps.CloudProxy.ListDevices(r.Context())
 	if err != nil {
 		WriteError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
@@ -169,23 +168,23 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 // handleXiaomiSync syncs Xiaomi cloud device info (name, model, MAC) to NVR camera config.
 // It fetches all devices from Xiaomi cloud, matches them to existing NVR cameras by DID,
 // and updates name, model, brand, and serial_number (MAC). Returns count of synced cameras.
-func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
-	if h.cloudProxy == nil {
+func (s *server) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CloudProxy == nil {
 		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
-	if h.config == nil || h.config.Xiaomi.Token == "" {
+	if s.deps.Config == nil || s.deps.Config.Xiaomi.Token == "" {
 		// 409 not 401 — "log into Xiaomi first" is a precondition, not an
 		// NVR-session failure; 401 bounced the user to the login page (#1014).
 		WriteError(w, http.StatusConflict, "xiaomi cloud not authenticated")
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
-	devices, err := h.cloudProxy.ListDevices(r.Context())
+	devices, err := s.deps.CloudProxy.ListDevices(r.Context())
 	if err != nil {
 		WriteError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
@@ -197,8 +196,8 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	synced := 0
-	for i := range h.config.Cameras {
-		cam := &h.config.Cameras[i]
+	for i := range s.deps.Config.Cameras {
+		cam := &s.deps.Config.Cameras[i]
 		if cam.Protocol != "xiaomi" {
 			continue
 		}
@@ -223,7 +222,7 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 			SerialNumber: &dev.MAC,
 		}
 
-		if _, err := h.camMgr.UpdateCamera(context.Background(), cam.ID, updates); err != nil {
+		if _, err := s.deps.Cam.UpdateCamera(context.Background(), cam.ID, updates); err != nil {
 			logger.Warn("failed to sync xiaomi camera", "camera_id", cam.ID, "did", did, "error", err)
 			continue
 		}
@@ -236,15 +235,15 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
-	if h.cloudProxy == nil {
+func (s *server) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CloudProxy == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"vendor":     "unknown",
 			"compatible": true,
 		})
 		return
 	}
-	if h.config == nil || h.config.Xiaomi.Token == "" {
+	if s.deps.Config == nil || s.deps.Config.Xiaomi.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"vendor":     "unknown",
 			"compatible": true,
@@ -258,7 +257,7 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vendor, err := h.cloudProxy.CheckVendor(r.Context(), did)
+	vendor, err := s.deps.CloudProxy.CheckVendor(r.Context(), did)
 	if err != nil {
 		// For errors, return unknown/compatible (don't block on uncertainty)
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -280,20 +279,20 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 }
 
 // saveXiaomiToken persists auth result to config file.
-func (h *Handler) saveXiaomiToken(result *CloudAuthResult) {
-	if h.config == nil || result == nil {
+func (s *server) saveXiaomiToken(result *CloudAuthResult) {
+	if s.deps.Config == nil || result == nil {
 		return
 	}
-	h.config.Xiaomi.UserID = result.UserID
-	h.config.Xiaomi.Token = result.PassToken
-	h.config.Xiaomi.Region = result.Region
-	if err := config.Save(h.configPath, h.config); err != nil {
+	s.deps.Config.Xiaomi.UserID = result.UserID
+	s.deps.Config.Xiaomi.Token = result.PassToken
+	s.deps.Config.Xiaomi.Region = result.Region
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		logger.Warn("failed to save xiaomi config", "error", err)
 	}
 
 	// Also push to the cloud proxy so it has the latest credentials
-	if h.cloudProxy != nil {
-		_ = h.cloudProxy.SetCloudConfig(context.Background(), result.UserID, result.PassToken, result.Region)
+	if s.deps.CloudProxy != nil {
+		_ = s.deps.CloudProxy.SetCloudConfig(context.Background(), result.UserID, result.PassToken, result.Region)
 	}
 }
 
@@ -319,15 +318,18 @@ func verificationToResponse(v *CloudVerificationRequired) map[string]any {
 
 // registerXiaomiRoutes registers Xiaomi cloud auth, device discovery, and
 // two-way audio upstream WebSocket routes.
-func (h *Handler) registerXiaomiRoutes(r chi.Router) {
-	r.Route("/api/xiaomi", func(r chi.Router) {
-		r.Post("/auth", h.handleXiaomiAuth)
-		r.Post("/captcha", h.handleXiaomiCaptcha)
-		r.Post("/verify", h.handleXiaomiVerify)
-		r.Get("/devices", h.handleXiaomiDevices)
-		r.Post("/sync", h.handleXiaomiSync)
-		r.Get("/check-vendor", h.handleCheckVendor)
-	})
-	// Xiaomi two-way audio upstream WebSocket
-	r.Get("/api/ws/camera/{id}/audio-upstream", h.handleAudioUpstreamWS)
+
+// extractDIDFromURL parses the DID from a xiaomi:// URL (moved with the
+// xiaomi domain from the api root).
+func extractDIDFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// strPtr returns a pointer to the given string.
+func strPtr(s string) *string {
+	return &s
 }

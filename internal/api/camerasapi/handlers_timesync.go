@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"context"
@@ -25,12 +25,12 @@ type TimeSyncOps interface {
 // Reports the camera's clock vs the NVR's. Never 500s on device trouble —
 // an unreadable clock is a status (available:false + error), not a server
 // failure, so the UI can render it.
-func (h *Handler) handleCameraTimeStatus(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCameraTimeStatus(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireTimeSyncCamera(w, r, cameraID) {
+	if !s.requireTimeSyncCamera(w, r, cameraID) {
 		return
 	}
-	st, err := h.timeSync.Status(r.Context(), cameraID)
+	st, err := s.deps.TimeSync.Status(r.Context(), cameraID)
 	if err != nil {
 		if errors.Is(err, onvif.ErrNoCredentials) {
 			WriteError(w, http.StatusBadRequest, err.Error())
@@ -45,9 +45,9 @@ func (h *Handler) handleCameraTimeStatus(w http.ResponseWriter, r *http.Request)
 // handleCameraTimeSync POST /api/cameras/{id}/time/sync
 // Measures and (when the skew ≥ 1s) writes the NVR time to the camera.
 // Body: {"timezone": "CST-8"} (optional POSIX TZ override).
-func (h *Handler) handleCameraTimeSync(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCameraTimeSync(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireTimeSyncCamera(w, r, cameraID) {
+	if !s.requireTimeSyncCamera(w, r, cameraID) {
 		return
 	}
 	var req struct {
@@ -59,7 +59,7 @@ func (h *Handler) handleCameraTimeSync(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := h.timeSync.CorrectCameraTime(r.Context(), cameraID, req.Timezone)
+	res, err := s.deps.TimeSync.CorrectCameraTime(r.Context(), cameraID, req.Timezone)
 	if err != nil {
 		if errors.Is(err, onvif.ErrNoCredentials) {
 			WriteError(w, http.StatusBadRequest, "camera credentials required to set its clock (configure the camera's ONVIF account first)")
@@ -75,9 +75,9 @@ func (h *Handler) handleCameraTimeSync(w http.ResponseWriter, r *http.Request) {
 // Points the camera at an NTP server (default: the NVR's own address as
 // routable from the camera) and flips it to NTP mode — the long-term
 // self-healing path. Body: {"server": "192.168.1.10"} (optional override).
-func (h *Handler) handleCameraTimeNTP(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCameraTimeNTP(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireTimeSyncCamera(w, r, cameraID) {
+	if !s.requireTimeSyncCamera(w, r, cameraID) {
 		return
 	}
 	var req struct {
@@ -89,7 +89,7 @@ func (h *Handler) handleCameraTimeNTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	server, err := h.timeSync.PointCameraAtNTP(r.Context(), cameraID, req.Server)
+	server, err := s.deps.TimeSync.PointCameraAtNTP(r.Context(), cameraID, req.Server)
 	if err != nil {
 		if errors.Is(err, onvif.ErrNoCredentials) {
 			WriteError(w, http.StatusBadRequest, "camera credentials required to set its NTP server (configure the camera's ONVIF account first)")
@@ -104,16 +104,16 @@ func (h *Handler) handleCameraTimeNTP(w http.ResponseWriter, r *http.Request) {
 // requireTimeSyncCamera validates handler-level preconditions shared by the
 // three endpoints: service wired, camera manager present, camera exists and
 // is ONVIF. Writes the error response and returns false on failure.
-func (h *Handler) requireTimeSyncCamera(w http.ResponseWriter, r *http.Request, cameraID string) bool {
-	if h.timeSync == nil {
+func (s *server) requireTimeSyncCamera(w http.ResponseWriter, r *http.Request, cameraID string) bool {
+	if s.deps.TimeSync == nil {
 		WriteError(w, http.StatusServiceUnavailable, "time sync service not available")
 		return false
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return false
 	}
-	cam := h.camMgr.GetCameraConfig(cameraID)
+	cam := s.deps.Cam.GetCameraConfig(cameraID)
 	if cam == nil {
 		WriteError(w, http.StatusNotFound, "camera not found")
 		return false

@@ -2,9 +2,10 @@
 //
 // Two-way audio REST + WebSocket handlers for Xiaomi cameras.
 
-package api
+package camerasapi
 
 import (
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"net/http"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
@@ -21,9 +22,9 @@ type startTwoWayAudioResponse struct {
 }
 
 // handleStartTwoWayAudio handles POST /api/cameras/{id}/two-way-audio/start.
-func (h *Handler) handleStartTwoWayAudio(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleStartTwoWayAudio(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	rec := h.camMgr.GetRecorder(id)
+	rec := s.deps.Cam.GetRecorder(id)
 	if rec == nil {
 		WriteError(w, http.StatusNotFound, "camera not found")
 		return
@@ -37,7 +38,7 @@ func (h *Handler) handleStartTwoWayAudio(w http.ResponseWriter, r *http.Request)
 
 	if err := recorder.StartTwoWayAudio(); err != nil {
 		xiaomiAudioLogger.Warn("failed to start two-way audio", "camera_id", id, "error", err)
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -52,9 +53,9 @@ func (h *Handler) handleStartTwoWayAudio(w http.ResponseWriter, r *http.Request)
 }
 
 // handleStopTwoWayAudio handles POST /api/cameras/{id}/two-way-audio/stop.
-func (h *Handler) handleStopTwoWayAudio(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleStopTwoWayAudio(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	rec := h.camMgr.GetRecorder(id)
+	rec := s.deps.Cam.GetRecorder(id)
 	if rec == nil {
 		WriteError(w, http.StatusNotFound, "camera not found")
 		return
@@ -68,7 +69,7 @@ func (h *Handler) handleStopTwoWayAudio(w http.ResponseWriter, r *http.Request) 
 
 	if err := recorder.StopTwoWayAudio(); err != nil {
 		xiaomiAudioLogger.Warn("failed to stop two-way audio", "camera_id", id, "error", err)
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -88,9 +89,9 @@ func (h *Handler) handleStopTwoWayAudio(w http.ResponseWriter, r *http.Request) 
 //
 // The PCM data is encoded to G.711 μ-law or A-law depending on the camera's
 // speaker codec, or passed through raw for PCM codec (1024).
-func (h *Handler) handleAudioUpstreamWS(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleAudioUpstreamWS(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	rec := h.camMgr.GetRecorder(id)
+	rec := s.deps.Cam.GetRecorder(id)
 	if rec == nil {
 		WriteError(w, http.StatusNotFound, "camera not found")
 		return
@@ -119,7 +120,7 @@ func (h *Handler) handleAudioUpstreamWS(w http.ResponseWriter, r *http.Request) 
 	xiaomiAudioLogger.Info("audio upstream starting", "camera_id", id, "speaker_codec", speakerCodec)
 
 	// Use wsstream.Manager to handle the WebSocket lifecycle.
-	err := h.wsMgr.AudioUpstream(w, r, func(msg []byte) error {
+	err := s.deps.WS.AudioUpstream(w, r, func(msg []byte) error {
 		return processAudioUpstreamMessage(recorder, speakerCodec, msg)
 	})
 	if err != nil {

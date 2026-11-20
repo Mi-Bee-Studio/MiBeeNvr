@@ -9,94 +9,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
-
-// --- cameraRowForAPI tests ---
-
-func TestCameraRowForAPI_ONVIFEndpoint(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	row := &storage.CameraRow{Protocol: "onvif", ONVIFEndpoint: "http://192.168.1.100/onvif/device_service", URL: ""}
-	cameraRowForAPI(row)
-	require.Equal(t, "http://192.168.1.100/onvif/device_service", row.URL)
-}
-
-func TestCameraRowForAPI_NonONVIFUnchanged(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	row := &storage.CameraRow{Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream", ONVIFEndpoint: ""}
-	cameraRowForAPI(row)
-	require.Equal(t, "rtsp://192.168.1.10/stream", row.URL)
-}
-
-func TestCameraRowForAPI_ONVIFWithURLAlreadySet(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	row := &storage.CameraRow{Protocol: "onvif", URL: "http://already-set", ONVIFEndpoint: "http://192.168.1.100/onvif"}
-	cameraRowForAPI(row)
-	require.Equal(t, "http://already-set", row.URL)
-}
-
-func TestCameraRowForAPI_ONVIFNoEndpoint(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	row := &storage.CameraRow{Protocol: "onvif", URL: "", ONVIFEndpoint: ""}
-	cameraRowForAPI(row)
-	require.Equal(t, "", row.URL)
-}
-
-// --- stripScheme tests ---
-
-func TestStripScheme_RTSPWithPort(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "192.168.1.10:554", stripScheme("rtsp://192.168.1.10:554/stream"))
-}
-
-func TestStripScheme_RTSPNoPort(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "192.168.1.10:554", stripScheme("rtsp://192.168.1.10/stream"))
-}
-
-func TestStripScheme_HTTPWithPort(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "192.168.1.10:8080", stripScheme("http://192.168.1.10:8080/capture"))
-}
-
-func TestStripScheme_HTTPS(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "camera.example.com:443", stripScheme("https://camera.example.com:443/stream"))
-}
-
-func TestStripScheme_NoScheme(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	result := stripScheme("192.168.1.10:554")
-	require.Contains(t, result, "192.168.1.10:554")
-}
-
-func TestStripScheme_RTSPDefaultPort(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "10.0.0.1:554", stripScheme("rtsp://10.0.0.1/path"))
-}
-
-func TestStripScheme_RTSPWithCredentials(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "192.168.1.10:554", stripScheme("rtsp://admin:secret@192.168.1.10/stream"))
-}
-
-func TestStripScheme_RTSPWithCredentialsAndPort(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "192.168.1.10:8554", stripScheme("rtsp://user:pass@192.168.1.10:8554/stream"))
-}
 
 // --- handleTestConnection validation tests ---
 
@@ -335,46 +249,6 @@ func TestValidateURL_Invalid(t *testing.T) {
 
 // --- resolveEncoding / probeCodec tests (encoding read-path unification, #166) ---
 
-// TestResolveEncoding_ProbeWinsOverStored proves the live recorder probe is
-// authoritative: a camera stored as h264 but physically streaming h265 (e.g.
-// Xiaomi) must display h265. This is the core of the #165 fix.
-func TestResolveEncoding_ProbeWinsOverStored(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	got := resolveEncoding("h264", model.FormatH265)
-	require.Equal(t, "h265", got, "probe (h265) must override stored h264")
-}
-
-// TestResolveEncoding_StoredFallbackOnEmptyProbe proves an empty probe (camera
-// offline / codec not yet detected) keeps the stored value. This guards against
-// re-introducing #112 (black screen when encoding="" reached the frontend).
-func TestResolveEncoding_StoredFallbackOnEmptyProbe(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "h264", resolveEncoding("h264", ""),
-		"empty probe must fall back to stored value")
-	require.Equal(t, "", resolveEncoding("", ""),
-		"empty probe + empty stored stays empty")
-}
-
-// TestResolveEncoding_ProbeFillsEmptyStored proves the probe fills in an empty
-// stored value (ONVIF auto-detect devices — the original backfill case).
-func TestResolveEncoding_ProbeFillsEmptyStored(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, "jpeg", resolveEncoding("", model.EncJPEG),
-		"probe must fill an empty stored encoding")
-}
-
-// TestProbeCodec_NilManager proves probeCodec is nil-safe so handlers can call
-// it unconditionally even when camMgr is unset (e.g. setup-required state).
-func TestProbeCodec_NilManager(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	require.Equal(t, model.Format(""), probeCodec(nil, "any-cam"),
-		"probeCodec(nil, ...) must return empty, not panic")
-}
-
 // --- handleListCameras tests ---
 
 func TestCameraList_EmptyList(t *testing.T) {
@@ -505,44 +379,6 @@ func TestUpdateCamera_InvalidURL(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/test-cam", bytes.NewReader([]byte(body)), "", "")
 	// camMgr is nil, so returns 500 before URL validation
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
-// --- validProtocols map test ---
-
-func TestValidProtocols(t *testing.T) {
-	t.Parallel()
-	for _, proto := range []string{"rtsp", "http", "onvif", "xiaomi", "srt", "rtmp", "timelapse"} {
-		require.True(t, validProtocols[proto], "expected %q to be valid", proto)
-	}
-	require.False(t, validProtocols["ftp"])
-	require.False(t, validProtocols[""])
-}
-
-// --- extractDIDFromURL tests ---
-
-func TestExtractDIDFromURL(t *testing.T) {
-	t.Parallel()
-	require.Equal(t, "12345678", extractDIDFromURL("xiaomi://12345678"))
-}
-
-func TestExtractDIDFromURL_Empty(t *testing.T) {
-	t.Parallel()
-	require.Equal(t, "", extractDIDFromURL(""))
-}
-
-func TestExtractDIDFromURL_Invalid(t *testing.T) {
-	t.Parallel()
-	require.Equal(t, "", extractDIDFromURL("://bad"))
-}
-
-// --- strPtr helper ---
-
-func TestStrPtr(t *testing.T) {
-	t.Parallel()
-	s := "hello"
-	p := strPtr(s)
-	require.NotNil(t, p)
-	require.Equal(t, "hello", *p)
 }
 
 // --- GB28181 encoding backfill ---

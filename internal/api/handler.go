@@ -15,6 +15,8 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/notifyapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/recordingsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/relayapi"
@@ -394,12 +396,9 @@ func (h *Handler) Routes() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(h.authMW)
 		recordingsapi.Register(r, recordingsDeps(h))
-		h.registerCameraRoutes(r)
+		camerasapi.Register(r, camerasDeps(h))
 		streamsapi.Register(r, streamsDeps(h))
 		h.registerSystemRoutes(r)
-		h.registerONVIFRoutes(r)
-		h.registerOnboardingRoutes(r)
-		h.registerXiaomiRoutes(r)
 		h.registerHealthRoutes(r)
 		relayapi.Register(r, relayapi.Deps{Relay: relayDeps(h.relayMgr)})
 		h.registerTranscodeRoutes(r)
@@ -407,7 +406,7 @@ func (h *Handler) Routes() http.Handler {
 		h.registerVisionRoutes(r)
 		h.registerTelemetryRoute(r)
 		h.registerViewerRoutes(r)
-		h.registerGB28181Routes(r)
+		gbapi.Register(r, gbDeps(h))
 		h.registerDoorbellRoutes(r)
 		notifyapi.Register(r, notifyapi.Deps{Service: notifyDeps(h.notifySvc)})
 		h.registerMediaRoutes(r)
@@ -437,12 +436,9 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		r.Get("/api/readyz", h.handleReadyz)
 		r.Get("/api/capabilities", h.handleCapabilities)
 		// Webhook trigger (public, rate-limited — HMAC signature is the credential, #709)
-		h.registerTriggerRoutes(r)
-		// GB28181 snapshot upload (public, rate-limited — the session ID in
-		// the URL is the credential; devices cannot BasicAuth, #708)
-		if h.gb28181SnapMgr != nil {
-			r.Post("/api/gb28181/snapshot/upload", h.handleGB28181SnapshotUpload)
-		}
+		camerasapi.RegisterPublic(r, camerasDeps(h))
+		// GB28181 snapshot upload lives in the gb domain (public callback).
+		gbapi.RegisterPublic(r, gbDeps(h))
 		// ONVIF push-event notify consumer (public, rate-limited — the token
 		// in the URL is the credential; devices cannot BasicAuth, #922)
 		if h.camMgr != nil {
@@ -499,8 +495,6 @@ func (h *Handler) registerMediaRoutes(r chi.Router) {
 	// Live camera audio (xiaomi/two-way speakers; camera-audio domain concern)
 	// and the remote-offload proxy share this exposure class with the
 	// recording download paths, which moved to recordingsapi.
-	r.Get("/api/cameras/{cameraID}/audio/live.wav", h.handleAudioLiveWav)
-	r.Get("/api/cameras/{cameraID}/audio/live", h.handleAudioLive)
 	r.Get("/api/offload/objects/{id}", h.handleOffloadObject)
 	r.Head("/api/offload/objects/{id}", h.handleOffloadObject)
 }
@@ -582,20 +576,6 @@ func testHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 }
 
-// extractDIDFromURL parses the DID from a xiaomi:// URL.
-func extractDIDFromURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	return u.Host
-}
-
-// strPtr returns a pointer to the given string.
-func strPtr(s string) *string {
-	return &s
-}
-
 // handleCapabilities handles GET /api/capabilities.
 // It returns the server's ingest capabilities (RTMP, SRT).
 func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -671,10 +651,7 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 // goto crossing the full pan range on a slow motor — if the window expires
 // mid-move the moving scene reads as activity and pollutes adaptive
 // recording and motion events. Stop only needs the scene to settle.
-const (
-	ptzSuppressWindowMove  = 30 * time.Second
-	ptzSuppressWindowShort = 8 * time.Second
-)
+const ()
 
 // SetPTZSuppressor wires the pixgate suppression hook fired on every PTZ
 // command (move / stop / goto preset), all protocols.

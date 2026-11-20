@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"context"
@@ -21,7 +21,7 @@ var probeHTTPClient = &http.Client{Timeout: 3 * time.Second}
 
 // handleTestConnection attempts to connect to a camera URL with a short timeout.
 // Returns success/failure, a human-readable message, and the latency in milliseconds.
-func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Protocol      string `json:"protocol"`
 		URL           string `json:"url"`

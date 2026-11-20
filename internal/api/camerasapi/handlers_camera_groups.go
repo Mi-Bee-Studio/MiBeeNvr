@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"encoding/json"
@@ -19,8 +19,8 @@ import (
 // rendered in section headers, not identifiers.
 const maxCameraGroupName = 64
 
-// maxCameraGroups caps the registry size (the order payload is the full list).
-const maxCameraGroups = 200
+// MaxCameraGroups caps the registry size (the order payload is the full list).
+const MaxCameraGroups = 200
 
 func normalizeCameraGroupName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
@@ -33,8 +33,8 @@ func normalizeCameraGroupName(raw string) (string, error) {
 	return name, nil
 }
 
-func (h *Handler) handleListCameraGroups(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.db.ListCameraGroups(r.Context())
+func (s *server) handleListCameraGroups(w http.ResponseWriter, r *http.Request) {
+	groups, err := s.deps.DB.ListCameraGroups(r.Context())
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list camera groups")
 		return
@@ -49,7 +49,7 @@ func (h *Handler) handleListCameraGroups(w http.ResponseWriter, r *http.Request)
 // drag-to-reorder on the management page). Unknown names are registered
 // (reordering a derived-only group persists it); names absent from the list
 // keep their old positions.
-func (h *Handler) handleSetCameraGroupsOrder(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleSetCameraGroupsOrder(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Names []string `json:"names"`
 	}
@@ -57,8 +57,8 @@ func (h *Handler) handleSetCameraGroupsOrder(w http.ResponseWriter, r *http.Requ
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if len(body.Names) > maxCameraGroups {
-		WriteError(w, http.StatusBadRequest, fmt.Sprintf("too many groups (max %d)", maxCameraGroups))
+	if len(body.Names) > MaxCameraGroups {
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("too many groups (max %d)", MaxCameraGroups))
 		return
 	}
 	seen := make(map[string]bool, len(body.Names))
@@ -74,14 +74,14 @@ func (h *Handler) handleSetCameraGroupsOrder(w http.ResponseWriter, r *http.Requ
 		}
 		seen[name] = true
 	}
-	if err := h.db.SetCameraGroupsOrder(r.Context(), body.Names); err != nil {
+	if err := s.deps.DB.SetCameraGroupsOrder(r.Context(), body.Names); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to set camera group order")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(body.Names)})
 }
 
-func (h *Handler) handleCreateCameraGroup(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCreateCameraGroup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -94,14 +94,14 @@ func (h *Handler) handleCreateCameraGroup(w http.ResponseWriter, r *http.Request
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.db.UpsertCameraGroup(r.Context(), name); err != nil {
+	if err := s.deps.DB.UpsertCameraGroup(r.Context(), name); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to create camera group")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"name": name})
 }
 
-func (h *Handler) handleRenameCameraGroup(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleRenameCameraGroup(w http.ResponseWriter, r *http.Request) {
 	oldName := chi.URLParam(r, "name")
 	var body struct {
 		Name string `json:"name"`
@@ -121,20 +121,20 @@ func (h *Handler) handleRenameCameraGroup(w http.ResponseWriter, r *http.Request
 	}
 	// Renaming onto an existing name MERGES the two groups (both member sets
 	// land on the target); that is a valid operation, not a conflict.
-	if err := h.db.RenameCameraGroup(r.Context(), oldName, newName); err != nil {
+	if err := s.deps.DB.RenameCameraGroup(r.Context(), oldName, newName); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to rename camera group")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": newName})
 }
 
-func (h *Handler) handleDeleteCameraGroup(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleDeleteCameraGroup(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if name == "" {
 		WriteError(w, http.StatusBadRequest, "group name cannot be empty")
 		return
 	}
-	ungrouped, err := h.db.DeleteCameraGroup(r.Context(), name)
+	ungrouped, err := s.deps.DB.DeleteCameraGroup(r.Context(), name)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to delete camera group")
 		return

@@ -1,10 +1,13 @@
-package api
+package gbapi
 
 // PTZ vector translation shared by the GB28181 / Xiaomi / ONVIF PTZ paths:
 // converting a normalized (pan, tilt, zoom) instruction into each protocol's
 // direction+speed encoding. Split out of handlers_onvif.go.
 
 import (
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
+	"time"
+
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +23,19 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 )
 
+// PTZ suppress windows: how long the pixgate pixel gate stays blind after a
+// camera movement command (moved/short variants).
+const (
+	ptzSuppressWindowMove  = 30 * time.Second
+	ptzSuppressWindowShort = 8 * time.Second
+)
+
 // gbPTZFromVector maps an ONVIF-style continuous-move vector onto the GB/T
 // 28181 PTZ direction bits (one axis at a time, zoom > tilt > pan priority,
 // matching the direction pad semantics) with a speed byte proportional to
 // the dominant axis magnitude (|axis|*255, so the UI's 0.5 default maps to
 // the protocol's mid speed 128).
-func gbPTZFromVector(pan, tilt, zoom float64) (direction string, speed byte) {
+func GBPTZFromVector(pan, tilt, zoom float64) (direction string, speed byte) {
 	switch {
 	case zoom > 0:
 		return platform.DirZoomIn, gbSpeedFromMagnitude(zoom)
@@ -55,88 +65,51 @@ func gbSpeedFromMagnitude(v float64) byte {
 	return byte(s)
 }
 
-// xiaomiPTZFromVector maps an ONVIF-style continuous-move vector onto the
-// Xiaomi motor wire command. Xiaomi PT cameras have no optical zoom — a
-// zoom-dominant vector is an explicit error so callers surface the
-// capability mismatch instead of a silent no-op. A zero vector maps to
-// "stop". Speed scales as magnitude*10 (the legacy pad's default speed 5
-// corresponds to the unified API's 0.5 default magnitude).
-func xiaomiPTZFromVector(pan, tilt, zoom float64) (direction string, speed int, err error) {
-	ax, ay, az := math.Abs(pan), math.Abs(tilt), math.Abs(zoom)
-	switch {
-	case az > 0 && az >= ax && az >= ay:
-		return "", 0, errors.New("PTZ zoom is not supported on Xiaomi cameras")
-	case ay > 0 && ay >= ax:
-		if tilt > 0 {
-			return "up", xiaomiSpeedFromMagnitude(ay), nil
-		}
-		return "down", xiaomiSpeedFromMagnitude(ay), nil
-	case ax > 0:
-		if pan > 0 {
-			return "right", xiaomiSpeedFromMagnitude(ax), nil
-		}
-		return "left", xiaomiSpeedFromMagnitude(ax), nil
-	default:
-		return "stop", 0, nil
-	}
-}
-
-func xiaomiSpeedFromMagnitude(v float64) int {
-	s := int(v*10 + 0.5)
-	if s < 1 {
-		s = 1
-	}
-	if s > 100 {
-		s = 100
-	}
-	return s
-}
-
 // handleGB28181PTZMove maps an ONVIF-style continuous-move vector onto the
 // GB/T 28181 PTZ direction bits (one axis at a time, matching the direction
 // pad semantics) and sends it via the channel PTZ controller.
-func (h *Handler) handleGB28181PTZMove(w http.ResponseWriter, r *http.Request, cameraID string, pan, tilt, zoom float64) {
-	channelID := h.gb28181ChannelID(cameraID)
+func (s *server) handleGB28181PTZMove(w http.ResponseWriter, r *http.Request, cameraID string, pan, tilt, zoom float64) {
+	channelID := s.gb28181ChannelID(cameraID)
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
-	direction, speed := gbPTZFromVector(pan, tilt, zoom)
-	h.sendGB28181PTZ(w, channelID, direction, speed)
+	direction, speed := GBPTZFromVector(pan, tilt, zoom)
+	s.sendGB28181PTZ(w, channelID, direction, speed)
 }
 
 // handleGB28181PTZStop sends the GB/T 28181 PTZ stop command.
-func (h *Handler) handleGB28181PTZStop(w http.ResponseWriter, r *http.Request, cameraID string) {
-	channelID := h.gb28181ChannelID(cameraID)
+func (s *server) handleGB28181PTZStop(w http.ResponseWriter, r *http.Request, cameraID string) {
+	channelID := s.gb28181ChannelID(cameraID)
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
-	h.sendGB28181PTZ(w, channelID, platform.DirStop, 0)
+	s.sendGB28181PTZ(w, channelID, platform.DirStop, 0)
 }
 
 // gb28181ChannelID resolves the camera's configured GB28181 channel binding.
-func (h *Handler) gb28181ChannelID(cameraID string) string {
-	if h.camMgr == nil {
+func (s *server) gb28181ChannelID(cameraID string) string {
+	if s.deps.Cam == nil {
 		return ""
 	}
-	cam := h.camMgr.GetCameraConfig(cameraID)
+	cam := s.deps.Cam.GetCameraConfig(cameraID)
 	if cam == nil || cam.Protocol != "gb28181" {
 		return ""
 	}
 	return cam.GB28181.ChannelID
 }
 
-func (h *Handler) sendGB28181PTZ(w http.ResponseWriter, channelID, direction string, speed byte) {
-	if err := h.gb28181PTZ.SendPTZ(channelID, direction, speed); err != nil {
+func (s *server) sendGB28181PTZ(w http.ResponseWriter, channelID, direction string, speed byte) {
+	if err := s.deps.PTZ.SendPTZ(channelID, direction, speed); err != nil {
 		switch {
 		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
@@ -155,9 +128,9 @@ func (h *Handler) sendGB28181PTZ(w http.ResponseWriter, channelID, direction str
 
 // --- PTZ control endpoints ---
 
-func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	h.suppressPTZMotion(cameraID, ptzSuppressWindowMove)
+	s.deps.PTZSuppress(cameraID, ptzSuppressWindowMove)
 	var req struct {
 		Mode string  `json:"mode"`
 		Pan  float64 `json:"pan"`
@@ -174,25 +147,25 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	}
 	// GB28181 cameras: translate the continuous-move vector into a GB/T 28181
 	// DeviceControl PTZ command via the SIP MESSAGE transport.
-	if h.cameraProtocol(r, cameraID) == "gb28181" {
-		h.handleGB28181PTZMove(w, r, cameraID, req.Pan, req.Tilt, req.Zoom)
+	if s.cameraProtocol(r, cameraID) == "gb28181" {
+		s.handleGB28181PTZMove(w, r, cameraID, req.Pan, req.Tilt, req.Zoom)
 		return
 	}
 	// Xiaomi cameras: translate the vector into the motor wire command so
 	// every surface (App / surveillance grid) drives PT cams through the same
 	// unified endpoint as ONVIF/GB cameras.
-	if h.cameraProtocol(r, cameraID) == "xiaomi" {
-		h.handleXiaomiVectorPTZMove(w, cameraID, req.Pan, req.Tilt, req.Zoom)
+	if s.cameraProtocol(r, cameraID) == "xiaomi" {
+		s.deps.XiaomiVectorMove(w, cameraID, req.Pan, req.Tilt, req.Zoom)
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	ptz, err := s.deps.Cam.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -214,30 +187,30 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	h.suppressPTZMotion(cameraID, ptzSuppressWindowShort)
-	if h.cameraProtocol(r, cameraID) == "gb28181" {
-		h.handleGB28181PTZStop(w, r, cameraID)
+	s.deps.PTZSuppress(cameraID, ptzSuppressWindowShort)
+	if s.cameraProtocol(r, cameraID) == "gb28181" {
+		s.handleGB28181PTZStop(w, r, cameraID)
 		return
 	}
-	if h.cameraProtocol(r, cameraID) == "xiaomi" {
-		if err := h.xiaomiMotorCommand(cameraID, "stop", 0); err != nil {
+	if s.cameraProtocol(r, cameraID) == "xiaomi" {
+		if err := s.deps.XiaomiMotorCommand(cameraID, "stop", 0); err != nil {
 			logger.Error("Xiaomi PTZ stop failed", "camera_id", cameraID, "error", err)
-			WriteError(w, h.xiaomiPTZStatusCode(err), fmt.Sprintf("PTZ stop failed: %v", err))
+			WriteError(w, s.deps.XiaomiPTZStatusCode(err), fmt.Sprintf("PTZ stop failed: %v", err))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	ptz, err := s.deps.Cam.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -250,16 +223,16 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
-func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	ptz, err := s.deps.Cam.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -273,7 +246,7 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 		// gated by capabilities upstream.
 		msg := err.Error()
 		if strings.Contains(msg, "not supported") || strings.Contains(msg, "<Fault>") ||
-			strings.Contains(msg, "Fault>") || isSOAPFaultStatus(msg) {
+			strings.Contains(msg, "Fault>") || IsSOAPFaultStatus(msg) {
 			slog.Debug("PTZ GetStatus rejected by device, returning default status",
 				"camera_id", cameraID, "error", err)
 			writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -295,20 +268,20 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 
 // --- PTZ preset endpoints ---
 
-func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if h.cameraProtocol(r, cameraID) == "gb28181" {
-		h.handleGB28181PTZGetPresets(w, r, cameraID)
+	if s.cameraProtocol(r, cameraID) == "gb28181" {
+		s.handleGB28181PTZGetPresets(w, r, cameraID)
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	ptz, err := s.deps.Cam.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -335,10 +308,10 @@ func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if h.cameraProtocol(r, cameraID) == "gb28181" {
-		h.handleGB28181PTZCreatePreset(w, r, cameraID)
+	if s.cameraProtocol(r, cameraID) == "gb28181" {
+		s.handleGB28181PTZCreatePreset(w, r, cameraID)
 		return
 	}
 	var req struct {
@@ -352,14 +325,14 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	ptz, err := s.deps.Cam.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -373,22 +346,22 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
-func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	h.suppressPTZMotion(cameraID, ptzSuppressWindowMove)
+	s.deps.PTZSuppress(cameraID, ptzSuppressWindowMove)
 	token := chi.URLParam(r, "token")
-	if h.cameraProtocol(r, cameraID) == "gb28181" {
-		h.handleGB28181PTZGoToPreset(w, r, cameraID, token)
+	if s.cameraProtocol(r, cameraID) == "gb28181" {
+		s.handleGB28181PTZGoToPreset(w, r, cameraID, token)
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	ptz, err := s.deps.Cam.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -401,21 +374,21 @@ func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	token := chi.URLParam(r, "token")
-	if h.cameraProtocol(r, cameraID) == "gb28181" {
-		h.handleGB28181PTZDeletePreset(w, r, cameraID, token)
+	if s.cameraProtocol(r, cameraID) == "gb28181" {
+		s.handleGB28181PTZDeletePreset(w, r, cameraID, token)
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	ptz, err := s.deps.Cam.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -434,7 +407,7 @@ func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) 
 // advertises PTZ in capabilities but has no PTZ node). Distinguished from
 // isAuthError (which also matches status 400) by requiring a SOAP envelope/Fault
 // body — pure auth rejections carry no envelope.
-func isSOAPFaultStatus(errStr string) bool {
+func IsSOAPFaultStatus(errStr string) bool {
 	hasStatus := strings.Contains(errStr, "status 400") ||
 		strings.Contains(errStr, "status 500") ||
 		strings.Contains(errStr, "status 501")
@@ -448,13 +421,13 @@ func isSOAPFaultStatus(errStr string) bool {
 func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 	switch {
 	case errors.As(err, new(*model.CameraNotFoundError)):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	case errors.As(err, new(*model.ONVIFNotCameraError)):
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 	case errors.As(err, new(*model.ONVIFConnectionError)):
-		writeAPIError(w, http.StatusBadGateway, err)
+		httpx.WriteAPIError(w, http.StatusBadGateway, err)
 	case errors.As(err, new(*model.ONVIFNoProfilesError)):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	default:
 		logger.Error("PTZ operation failed", "camera_id", cameraID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "PTZ operation failed")
@@ -464,16 +437,16 @@ func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 // --- Snapshot URI endpoint ---
 
 // handleSnapshotGetUri returns the ONVIF snapshot URI for a camera.
-func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	provider, err := h.camMgr.GetSnapshotProvider(r.Context(), cameraID)
+	provider, err := s.deps.Cam.GetSnapshotProvider(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFSnapshotError(w, cameraID, err)
 		return
@@ -497,16 +470,16 @@ func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
 // --- Imaging endpoints ---
 
 // handleImagingGetSettings returns current imaging settings for a camera.
-func (h *Handler) handleImagingGetSettings(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleImagingGetSettings(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	img, err := s.deps.Cam.GetImagingController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFImagingError(w, cameraID, err)
 		return
@@ -520,21 +493,21 @@ func (h *Handler) handleImagingGetSettings(w http.ResponseWriter, r *http.Reques
 }
 
 // handleImagingSetSettings applies imaging parameter changes for a camera.
-func (h *Handler) handleImagingSetSettings(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleImagingSetSettings(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	var req onvif.ImagingSettings
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	img, err := s.deps.Cam.GetImagingController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFImagingError(w, cameraID, err)
 		return
@@ -547,16 +520,16 @@ func (h *Handler) handleImagingSetSettings(w http.ResponseWriter, r *http.Reques
 }
 
 // handleImagingGetOptions returns supported imaging parameter ranges for a camera.
-func (h *Handler) handleImagingGetOptions(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleImagingGetOptions(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	img, err := s.deps.Cam.GetImagingController(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFImagingError(w, cameraID, err)
 		return
@@ -573,13 +546,13 @@ func (h *Handler) handleImagingGetOptions(w http.ResponseWriter, r *http.Request
 func handleONVIFImagingError(w http.ResponseWriter, cameraID string, err error) {
 	switch {
 	case errors.As(err, new(*model.CameraNotFoundError)):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	case errors.As(err, new(*model.ONVIFNotCameraError)):
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 	case errors.As(err, new(*model.ONVIFConnectionError)):
-		writeAPIError(w, http.StatusBadGateway, err)
+		httpx.WriteAPIError(w, http.StatusBadGateway, err)
 	case errors.As(err, new(*model.ONVIFNoProfilesError)):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	default:
 		logger.Error("imaging operation failed", "camera_id", cameraID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "imaging operation failed")
@@ -592,13 +565,13 @@ func handleONVIFImagingError(w http.ResponseWriter, cameraID string, err error) 
 func handleONVIFSnapshotError(w http.ResponseWriter, cameraID string, err error) {
 	switch {
 	case errors.As(err, new(*model.CameraNotFoundError)):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	case errors.As(err, new(*model.ONVIFNotCameraError)):
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 	case errors.As(err, new(*model.ONVIFConnectionError)):
-		writeAPIError(w, http.StatusBadGateway, err)
+		httpx.WriteAPIError(w, http.StatusBadGateway, err)
 	case errors.As(err, new(*model.ONVIFNoProfilesError)):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	default:
 		logger.Error("snapshot operation failed", "camera_id", cameraID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "snapshot operation failed")
@@ -608,16 +581,16 @@ func handleONVIFSnapshotError(w http.ResponseWriter, cameraID string, err error)
 // --- Device Management endpoints ---
 
 // handleONVIFReboot reboots the target ONVIF camera.
-func (h *Handler) handleONVIFReboot(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFReboot(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	dm, err := s.deps.Cam.GetDeviceManager(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFDeviceMgmtError(w, cameraID, err)
 		return
@@ -634,16 +607,16 @@ func (h *Handler) handleONVIFReboot(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleONVIFGetNetwork returns network interface configuration.
-func (h *Handler) handleONVIFGetNetwork(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFGetNetwork(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	dm, err := s.deps.Cam.GetDeviceManager(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFDeviceMgmtError(w, cameraID, err)
 		return
@@ -657,7 +630,7 @@ func (h *Handler) handleONVIFGetNetwork(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleONVIFSetNetwork configures network interfaces on the target camera.
-func (h *Handler) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	var req struct {
 		Interfaces []onvif.NetworkInterface `json:"interfaces"`
@@ -666,14 +639,14 @@ func (h *Handler) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	dm, err := s.deps.Cam.GetDeviceManager(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFDeviceMgmtError(w, cameraID, err)
 		return
@@ -690,16 +663,16 @@ func (h *Handler) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleONVIFGetUsers returns user accounts on the target camera.
-func (h *Handler) handleONVIFGetUsers(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFGetUsers(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	dm, err := s.deps.Cam.GetDeviceManager(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFDeviceMgmtError(w, cameraID, err)
 		return
@@ -713,7 +686,7 @@ func (h *Handler) handleONVIFGetUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleONVIFCreateUsers creates user accounts on the target camera.
-func (h *Handler) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	var req struct {
 		Users []onvif.ONVIFUser `json:"users"`
@@ -722,14 +695,14 @@ func (h *Handler) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request)
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	dm, err := s.deps.Cam.GetDeviceManager(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFDeviceMgmtError(w, cameraID, err)
 		return
@@ -742,7 +715,7 @@ func (h *Handler) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request)
 }
 
 // handleONVIFDeleteUsers deletes user accounts from the target camera.
-func (h *Handler) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	var req struct {
 		Usernames []string `json:"usernames"`
@@ -751,14 +724,14 @@ func (h *Handler) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request)
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	dm, err := s.deps.Cam.GetDeviceManager(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFDeviceMgmtError(w, cameraID, err)
 		return
@@ -771,7 +744,7 @@ func (h *Handler) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request)
 }
 
 // handleONVIFSetUser modifies a user account on the target camera.
-func (h *Handler) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	username := chi.URLParam(r, "username")
 	var req struct {
@@ -781,14 +754,14 @@ func (h *Handler) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	dm, err := s.deps.Cam.GetDeviceManager(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFDeviceMgmtError(w, cameraID, err)
 		return
@@ -804,11 +777,11 @@ func (h *Handler) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
 func handleONVIFDeviceMgmtError(w http.ResponseWriter, cameraID string, err error) {
 	switch {
 	case errors.As(err, new(*model.CameraNotFoundError)):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	case errors.As(err, new(*model.ONVIFNotCameraError)):
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 	case errors.As(err, new(*model.ONVIFConnectionError)):
-		writeAPIError(w, http.StatusBadGateway, err)
+		httpx.WriteAPIError(w, http.StatusBadGateway, err)
 	default:
 		logger.Error("device management operation failed", "camera_id", cameraID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "device management operation failed")
@@ -816,8 +789,3 @@ func handleONVIFDeviceMgmtError(w http.ResponseWriter, cameraID string, err erro
 }
 
 // registerONVIFRoutes registers ONVIF discovery and probe routes.
-func (h *Handler) registerONVIFRoutes(r chi.Router) {
-	r.Post("/api/onvif/discover", h.handleONVIFDiscover)
-	r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
-	r.Post("/api/onvif/probe", h.handleONVIFProbe)
-}

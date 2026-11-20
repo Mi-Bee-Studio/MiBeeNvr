@@ -1,10 +1,11 @@
-package api
+package camerasapi
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,7 +25,7 @@ const defaultAudioDeviceRetentionDays = 7
 
 // validateAudioLink checks an audio-device → video-camera association (v43):
 // the target must exist and be a real (non-audio) camera.
-func (h *Handler) validateAudioLink(ctx context.Context, selfID, targetID string) error {
+func (s *server) validateAudioLink(ctx context.Context, selfID, targetID string) error {
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {
 		return nil
@@ -32,10 +33,10 @@ func (h *Handler) validateAudioLink(ctx context.Context, selfID, targetID string
 	if targetID == selfID {
 		return errors.New("audio_link_camera_id cannot reference itself")
 	}
-	if h.db == nil {
+	if s.deps.DB == nil {
 		return nil
 	}
-	row, err := h.db.GetCamera(ctx, targetID)
+	row, err := s.deps.DB.GetCamera(ctx, targetID)
 	if err != nil {
 		return fmt.Errorf("audio link lookup failed: %w", err)
 	}
@@ -93,7 +94,7 @@ func (p *gb28181ChannelPayload) toConfigPtr() *config.GB28181ChannelConfig {
 	return &cfg
 }
 
-func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name         string `json:"name"`
 		Protocol     string `json:"protocol"`
@@ -193,9 +194,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// vision_targets must reference existing vision instances (see update path).
-	if len(body.VisionTargets) > 0 && h.config != nil {
-		known := make(map[string]bool, len(h.config.Vision.Instances)+1)
-		for _, ins := range h.config.Vision.EffectiveInstances() {
+	if len(body.VisionTargets) > 0 && s.deps.Config != nil {
+		known := make(map[string]bool, len(s.deps.Config.Vision.Instances)+1)
+		for _, ins := range s.deps.Config.Vision.EffectiveInstances() {
 			known[ins.Name] = true
 		}
 		for _, name := range body.VisionTargets {
@@ -232,15 +233,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	// matches a registered GB28181 device is the same physical camera — the
 	// GB28181 auto-enroll skips it symmetrically. Refuse unless the caller
 	// explicitly opts in (dual-protocol setups) with allow_duplicate.
-	if !isPush && !isGB28181 && h.gb28181DeviceMgr != nil {
+	if !isPush && !isGB28181 && s.deps.GBDeviceAddrs != nil {
 		if host := createBodyHost(body.URL, body.ONVIFEndpoint); host != "" {
 			conflict := ""
-			for _, d := range h.gb28181DeviceMgr.AllDevices() {
-				d.Mu.RLock()
-				netAddr := d.NetAddr
-				d.Mu.RUnlock()
-				devHost := netAddr
-				if h2, _, err := net.SplitHostPort(netAddr); err == nil && h2 != "" {
+			for _, d := range s.deps.GBDeviceAddrs() {
+				devHost := d.NetAddr
+				if h2, _, err := net.SplitHostPort(d.NetAddr); err == nil && h2 != "" {
 					devHost = h2
 				}
 				if devHost == host {
@@ -253,8 +251,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			// and match it against cached GB28181 device fingerprints. Skipped
 			// entirely when no fingerprints exist (no dual-protocol device has
 			// ever registered) so normal setups pay no probe latency.
-			if conflict == "" && h.db != nil {
-				if fps, err := h.db.ListGB28181Fingerprints(r.Context()); err == nil && len(fps) > 0 {
+			if conflict == "" && s.deps.DB != nil {
+				if fps, err := s.deps.DB.ListGB28181Fingerprints(r.Context()); err == nil && len(fps) > 0 {
 					if serial, ok := onvif.ProbeSerial(r.Context(), host); ok {
 						for _, fp := range fps {
 							if fp.Serial == serial {
@@ -288,8 +286,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		body.ONVIFEndpoint = endpoint
 		body.URL = "" // Don't store in url field for ONVIF
-		if h.db != nil {
-			existingCams, _ := h.db.ListCameras(r.Context())
+		if s.deps.DB != nil {
+			existingCams, _ := s.deps.DB.ListCameras(r.Context())
 			for _, ec := range existingCams {
 				if ec.Protocol != "onvif" || ec.ONVIFEndpoint != body.ONVIFEndpoint {
 					continue
@@ -299,7 +297,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 				// each is its own camera, told apart by its media profile.
 				// An explicit profile_token no existing camera on this
 				// endpoint records is another channel, not a duplicate.
-				if body.ProfileToken != "" && onvifProfileTokenOf(h.config, &ec) != body.ProfileToken {
+				if body.ProfileToken != "" && onvifProfileTokenOf(s.deps.Config, &ec) != body.ProfileToken {
 					continue
 				}
 				WriteError(w, http.StatusConflict, "ONVIF camera with this endpoint already exists"+
@@ -312,7 +310,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate URL format for cameras that have one (not ONVIF, not push, not gb28181)
-	if body.Protocol != "onvif" && !isPush && !isGB28181 && body.URL != "" && !validateURL(body.URL) {
+	if body.Protocol != "onvif" && !isPush && !isGB28181 && body.URL != "" && !httpx.ValidateURL(body.URL) {
 		WriteError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
@@ -373,8 +371,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	// per-camera target the hardware cannot serve, at the wire.
 	if body.Transcoding != nil && body.Transcoding.TargetCodec == "h265" {
 		ffmpegPath := ""
-		if h.config != nil && h.config.Transcoding.FFmpegPath != "" {
-			ffmpegPath = h.config.Transcoding.FFmpegPath
+		if s.deps.Config != nil && s.deps.Config.Transcoding.FFmpegPath != "" {
+			ffmpegPath = s.deps.Config.Transcoding.FFmpegPath
 		}
 		if caps := transcoding.ProbeHardwareCapabilities(ffmpegPath); caps.H265EncoderType == transcoding.EncoderSoftware {
 			WriteError(w, http.StatusBadRequest, "H.265 transcoding is not available on this device (no hardware encoder)")
@@ -386,7 +384,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	// leave a half-configured device behind).
 	if enc == string(model.FormatAudio) {
 		if link := strings.TrimSpace(body.AudioLinkCameraID); link != "" {
-			if err := h.validateAudioLink(r.Context(), "", link); err != nil {
+			if err := s.validateAudioLink(r.Context(), "", link); err != nil {
 				WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -457,15 +455,15 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	id, err := h.camMgr.AddCamera(r.Context(), cam)
+	id, err := s.deps.Cam.AddCamera(r.Context(), cam)
 	if err != nil {
 		var cae *model.CameraAlreadyExistsError
 		if errors.As(err, &cae) {
-			writeAPIError(w, http.StatusConflict, err)
+			httpx.WriteAPIError(w, http.StatusConflict, err)
 		} else {
 			logger.Error("failed to add camera", "camera_id", id, "error", err, "path", r.URL.Path)
 			WriteError(w, http.StatusInternalServerError, "failed to add camera")
@@ -474,20 +472,20 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Notify merge scheduler if camera has timelapse config
-	if body.Timelapse != nil && body.Timelapse.MergeDuration != "" && h.mergeScheduler != nil {
+	if body.Timelapse != nil && body.Timelapse.MergeDuration != "" && s.deps.MergeScheduler != nil {
 		if dur, err := config.ParseMergeDuration(body.Timelapse.MergeDuration); err == nil {
-			h.mergeScheduler.AddOrUpdate(id, dur)
+			s.deps.MergeScheduler.AddOrUpdate(id, dur)
 		}
 	}
 	// Persist DB-only metadata fields
 	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
-		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
+		if err := s.deps.DB.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
 			logger.Warn("failed to set camera metadata", "camera_id", id, "error", err)
 		}
 	}
 	// Group label (v36) — DB-only metadata.
 	if g := strings.TrimSpace(body.Group); g != "" {
-		if err := h.db.UpdateCameraGroup(r.Context(), id, g); err != nil {
+		if err := s.deps.DB.UpdateCameraGroup(r.Context(), id, g); err != nil {
 			logger.Warn("failed to set camera group", "camera_id", id, "error", err)
 		}
 	}
@@ -499,35 +497,35 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		if rd <= 0 {
 			rd = defaultAudioDeviceRetentionDays
 		}
-		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, rd); err != nil {
+		if err := s.deps.DB.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, rd); err != nil {
 			logger.Warn("failed to set audio device metadata/retention", "camera_id", id, "error", err)
 		}
 		if link := strings.TrimSpace(body.AudioLinkCameraID); link != "" {
-			if err := h.db.UpdateCameraAudioLink(r.Context(), id, link); err != nil {
+			if err := s.deps.DB.UpdateCameraAudioLink(r.Context(), id, link); err != nil {
 				logger.Warn("failed to set audio link", "camera_id", id, "error", err)
 			}
 		}
 	}
 	// Persist push/ingest fields for srt/rtmp cameras.
 	if isPush {
-		if err := h.db.UpsertCameraIngest(r.Context(), id, body.StreamKey, body.SRTPassphrase, body.SRTStreamID); err != nil {
+		if err := s.deps.DB.UpsertCameraIngest(r.Context(), id, body.StreamKey, body.SRTPassphrase, body.SRTStreamID); err != nil {
 			logger.Warn("failed to set camera ingest fields", "camera_id", id, "error", err)
 		}
 	}
-	row, _ := h.db.GetCamera(r.Context(), id)
+	row, _ := s.deps.DB.GetCamera(r.Context(), id)
 	if row != nil {
-		if h.camMgr != nil {
-			row.Status = h.camMgr.CameraStatus(id)
+		if s.deps.Cam != nil {
+			row.Status = s.deps.Cam.CameraStatus(id)
 		}
 		// Inject last_seen from DB
-		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+		lastSeen, err := s.deps.DB.GetLastRecordingTime(r.Context(), id)
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
 		// Overlay the YAML-only fields (motion_source, imaging_type, sub
 		// profile, …) so the create response reflects what was just saved
 		// instead of making callers re-GET (#297 lesson).
-		injectYAMLConfigFields(row, h.config)
+		injectYAMLConfigFields(row, s.deps.Config)
 		cameraRowForAPI(row)
 		writeJSON(w, http.StatusCreated, row)
 	} else {

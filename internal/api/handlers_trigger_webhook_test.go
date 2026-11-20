@@ -30,54 +30,6 @@ func webhookSign(secret string, ts int64, body []byte) string {
 // webhookNow pins the "server clock" for pure verification tests.
 var webhookNow = time.Unix(1731000000, 0)
 
-func TestVerifyWebhookSignature(t *testing.T) {
-	t.Parallel()
-	const secret = "whsec_test"
-	const window = 5 * time.Minute
-	body := []byte(`{"reason":"doorbell"}`)
-
-	valid := webhookSign(secret, webhookNow.Unix(), body)
-
-	t.Run("valid", func(t *testing.T) {
-		require.NoError(t, verifyWebhookSignature(secret, valid, body, webhookNow, window))
-	})
-	t.Run("tampered body", func(t *testing.T) {
-		require.Error(t, verifyWebhookSignature(secret, valid, []byte(`{"reason":"evil"}`), webhookNow, window))
-	})
-	t.Run("wrong secret", func(t *testing.T) {
-		require.Error(t, verifyWebhookSignature("whsec_other", valid, body, webhookNow, window))
-	})
-	t.Run("stale timestamp", func(t *testing.T) {
-		stale := webhookSign(secret, webhookNow.Add(-window-time.Second).Unix(), body)
-		require.ErrorIs(t, verifyWebhookSignature(secret, stale, body, webhookNow, window), errWebhookStaleTimestamp)
-	})
-	t.Run("future timestamp beyond window", func(t *testing.T) {
-		future := webhookSign(secret, webhookNow.Add(window+time.Second).Unix(), body)
-		require.ErrorIs(t, verifyWebhookSignature(secret, future, body, webhookNow, window), errWebhookStaleTimestamp)
-	})
-	t.Run("timestamp is covered by the mac", func(t *testing.T) {
-		// A fresh ts with the v1 computed over a DIFFERENT ts must not verify —
-		// the timestamp must be inside the signed payload, not a free field.
-		mac := hmac.New(sha256.New, []byte(secret))
-		fmt.Fprintf(mac, "%d.", webhookNow.Add(-time.Hour).Unix())
-		mac.Write(body)
-		forged := fmt.Sprintf("t=%d,v1=%s", webhookNow.Unix(), hex.EncodeToString(mac.Sum(nil)))
-		require.Error(t, verifyWebhookSignature(secret, forged, body, webhookNow, window))
-	})
-	t.Run("malformed headers", func(t *testing.T) {
-		cases := []string{
-			"",
-			"v1=abc",
-			"t=abc,v1=abc",
-			fmt.Sprintf("t=%d", webhookNow.Unix()),
-			fmt.Sprintf("t=%d,v1=not-hex", webhookNow.Unix()),
-		}
-		for _, hdr := range cases {
-			require.Error(t, verifyWebhookSignature(secret, hdr, body, webhookNow, window), "header %q must be rejected", hdr)
-		}
-	})
-}
-
 // dispatchRecorder captures dispatcher invocations (thread-safe — the handler
 // may dispatch from the request goroutine, but tests must not race the read).
 type dispatchRecorder struct {

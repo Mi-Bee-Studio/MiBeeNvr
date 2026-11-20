@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"context"

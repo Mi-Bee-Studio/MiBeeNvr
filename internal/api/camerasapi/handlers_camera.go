@@ -1,9 +1,10 @@
-package api
+package camerasapi
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"hash/crc32"
 	"net/http"
@@ -90,8 +91,8 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 	}
 }
 
-func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
-	cameras, err := h.db.ListCameras(r.Context())
+func (s *server) handleListCameras(w http.ResponseWriter, r *http.Request) {
+	cameras, err := s.deps.DB.ListCameras(r.Context())
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list cameras")
 		return
@@ -100,8 +101,8 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 		cameras = []storage.CameraRow{}
 	}
 	// Inject recorder status from CameraManager
-	if h.camMgr != nil {
-		statusMap := h.camMgr.Status()
+	if s.deps.Cam != nil {
+		statusMap := s.deps.Cam.Status()
 		for i := range cameras {
 			if s, ok := statusMap[cameras[i].ID]; ok {
 				cameras[i].Status = s
@@ -110,16 +111,16 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Inject error details from CameraManager
-		if h.camMgr != nil {
+		if s.deps.Cam != nil {
 			for i := range cameras {
-				if detail := h.camMgr.GetErrorDetail(cameras[i].ID); detail != nil {
+				if detail := s.deps.Cam.GetErrorDetail(cameras[i].ID); detail != nil {
 					cameras[i].ErrorType = &detail.Type
 					cameras[i].ErrorDetail = &detail.Message
 				}
 			}
 		}
 		// Inject last_seen from DB
-		lastSeenMap, err := h.db.GetAllLastRecordingTimes(r.Context())
+		lastSeenMap, err := s.deps.DB.GetAllLastRecordingTimes(r.Context())
 		if err == nil {
 			for i := range cameras {
 				if t, ok := lastSeenMap[cameras[i].ID]; ok {
@@ -131,7 +132,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	// Inject per-camera transcoding config, channel, audio_enabled, and push
 	// fields from config (not all stored in DB columns read by ListCameras).
 	for i := range cameras {
-		injectYAMLConfigFields(&cameras[i], h.config)
+		injectYAMLConfigFields(&cameras[i], s.deps.Config)
 	}
 	// For ONVIF cameras, show onvif_endpoint as url for unified frontend handling
 	for i := range cameras {
@@ -152,9 +153,9 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	// — the displayed value is unchanged. For auto-detect cameras (onvif/xiaomi)
 	// the probe is the real codec and the stored value may be stale or empty;
 	// showing the probe here makes list/get/protocols consistent (#166).
-	if h.camMgr != nil {
+	if s.deps.Cam != nil {
 		for i := range cameras {
-			cameras[i].Encoding = resolveEncoding(cameras[i].Encoding, probeCodec(h.camMgr, cameras[i].ID))
+			cameras[i].Encoding = resolveEncoding(cameras[i].Encoding, probeCodec(s.deps.Cam, cameras[i].ID))
 		}
 	}
 	// Summary view: return only the fields needed for grid/dashboard display.
@@ -187,7 +188,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				Status:      string(c.Status),
 				Encoding:    string(c.Encoding),
 				Protocol:    c.Protocol,
-				IsRecording: c.Status == model.StatusRecording && h.config.RecordingGate(c.RecordingEnabled),
+				IsRecording: c.Status == model.StatusRecording && s.deps.Config.RecordingGate(c.RecordingEnabled),
 				Group:       c.GroupName,
 				ImagingType: c.ImagingType,
 			}
@@ -252,9 +253,9 @@ var validProtocols = map[string]bool{
 
 // gb28181ChannelPayload is the API shape of a camera's GB28181 binding.
 
-func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	row, err := h.db.GetCamera(r.Context(), id)
+	row, err := s.deps.DB.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
@@ -264,24 +265,24 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Inject recorder status
-	if h.camMgr != nil {
-		row.Status = h.camMgr.CameraStatus(id)
+	if s.deps.Cam != nil {
+		row.Status = s.deps.Cam.CameraStatus(id)
 	}
 	// Inject last_seen from DB
-	lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+	lastSeen, err := s.deps.DB.GetLastRecordingTime(r.Context(), id)
 	if err == nil {
 		row.LastSeen = lastSeen
 	}
 	// Inject per-camera transcoding config, channel, audio_enabled, and push
 	// fields from config (not all stored in DB columns read by GetCamera).
-	injectYAMLConfigFields(row, h.config)
+	injectYAMLConfigFields(row, s.deps.Config)
 	cameraRowForAPI(row)
 	// Resolve displayed encoding from the live recorder probe (authoritative),
 	// falling back to the stored value when the probe is empty. Matches
 	// handleListCameras and /protocols so all three paths agree. See
 	// handleListCameras for the full rationale (#166).
-	if h.camMgr != nil {
-		row.Encoding = resolveEncoding(row.Encoding, probeCodec(h.camMgr, id))
+	if s.deps.Cam != nil {
+		row.Encoding = resolveEncoding(row.Encoding, probeCodec(s.deps.Cam, id))
 	}
 	writeJSON(w, http.StatusOK, row)
 }
@@ -330,13 +331,13 @@ func resolveEncoding(stored string, probe model.Format) string {
 
 // handleCameraPushStatus returns the runtime status of a camera's push-out relay
 // targets (RTMP/RTSP). Used by the camera card/form to show live relay state.
-func (h *Handler) handleCameraPushStatus(w http.ResponseWriter, r *http.Request) {
-	if h.camMgr == nil {
+func (s *server) handleCameraPushStatus(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	id := chi.URLParam(r, "id")
-	status := h.camMgr.RelayStatus(id)
+	status := s.deps.Cam.RelayStatus(id)
 	if status == nil {
 		status = []interface{}{}
 	}
@@ -346,8 +347,8 @@ func (h *Handler) handleCameraPushStatus(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
-	if h.camMgr == nil {
+func (s *server) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
@@ -448,9 +449,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 
 	// vision_targets must reference existing vision instances — a typo would
 	// silently route the camera nowhere (empty resolved route), so reject it.
-	if body.VisionTargets != nil && h.config != nil {
-		known := make(map[string]bool, len(h.config.Vision.Instances)+1)
-		for _, ins := range h.config.Vision.EffectiveInstances() {
+	if body.VisionTargets != nil && s.deps.Config != nil {
+		known := make(map[string]bool, len(s.deps.Config.Vision.Instances)+1)
+		for _, ins := range s.deps.Config.Vision.EffectiveInstances() {
 			known[ins.Name] = true
 		}
 		for _, name := range *body.VisionTargets {
@@ -491,8 +492,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	// Validate transcoding config against hardware capabilities
 	if body.Transcoding != nil && body.Transcoding.TargetCodec == "h265" {
 		ffmpegPath := ""
-		if h.config != nil && h.config.Transcoding.FFmpegPath != "" {
-			ffmpegPath = h.config.Transcoding.FFmpegPath
+		if s.deps.Config != nil && s.deps.Config.Transcoding.FFmpegPath != "" {
+			ffmpegPath = s.deps.Config.Transcoding.FFmpegPath
 		}
 		caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
 		if caps.H265EncoderType == transcoding.EncoderSoftware {
@@ -557,7 +558,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 
 	// Audio link (v43): validate before mutating anything.
 	if body.AudioLinkCameraID != nil {
-		if err := h.validateAudioLink(r.Context(), id, *body.AudioLinkCameraID); err != nil {
+		if err := s.validateAudioLink(r.Context(), id, *body.AudioLinkCameraID); err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -571,8 +572,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		body.MotionSource != nil || body.MJPEGForm != nil || body.ImagingType != nil ||
 		body.SpectrumGroup != nil {
 		probe := config.CameraConfig{ID: id}
-		if h.config != nil {
-			for _, cam := range h.config.Cameras {
+		if s.deps.Config != nil {
+			for _, cam := range s.deps.Config.Cameras {
 				if cam.ID == id {
 					probe = cam
 					break
@@ -619,7 +620,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 			proto = *body.Protocol
 		}
 		if proto != "onvif" && proto != "srt" && proto != "rtmp" && proto != "whip" && proto != "gb28181" {
-			if !validateURL(*body.URL) {
+			if !httpx.ValidateURL(*body.URL) {
 				WriteError(w, http.StatusBadRequest, "invalid URL format")
 				return
 			}
@@ -644,7 +645,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	if body.Protocol != nil || body.Encoding != nil {
 		proto, enc := "", ""
 		managed := false
-		if cur := h.camMgr.GetCameraConfig(id); cur != nil {
+		if cur := s.deps.Cam.GetCameraConfig(id); cur != nil {
 			proto, enc = cur.Protocol, cur.Encoding
 			managed = true
 		}
@@ -665,11 +666,11 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err := h.camMgr.UpdateCamera(r.Context(), id, updates)
+	_, err := s.deps.Cam.UpdateCamera(r.Context(), id, updates)
 	if err != nil {
 		var cnf *model.CameraNotFoundError
 		if errors.As(err, &cnf) {
-			writeAPIError(w, http.StatusNotFound, err)
+			httpx.WriteAPIError(w, http.StatusNotFound, err)
 			return
 		}
 		logger.Error("failed to update camera", "camera_id", id, "error", err, "path", r.URL.Path)
@@ -679,24 +680,24 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	// Persist push/ingest fields if any were provided in the update.
 	if body.StreamKey != nil || body.SRTPassphrase != nil || body.SRTStreamID != nil {
 		// Read current values to merge with partial updates.
-		updated := h.camMgr.GetCameraConfig(id)
+		updated := s.deps.Cam.GetCameraConfig(id)
 		if updated != nil {
-			if err := h.db.UpsertCameraIngest(r.Context(), id, updated.StreamKey, updated.SRTPassphrase, updated.SRTStreamID); err != nil {
+			if err := s.deps.DB.UpsertCameraIngest(r.Context(), id, updated.StreamKey, updated.SRTPassphrase, updated.SRTStreamID); err != nil {
 				logger.Warn("failed to update camera ingest fields", "camera_id", id, "error", err)
 			}
 		}
 	}
-	row, err := h.db.GetCamera(r.Context(), id)
+	row, err := s.deps.DB.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if row != nil {
-		if h.camMgr != nil {
-			row.Status = h.camMgr.CameraStatus(id)
+		if s.deps.Cam != nil {
+			row.Status = s.deps.Cam.CameraStatus(id)
 		}
 		// Inject last_seen from DB
-		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+		lastSeen, err := s.deps.DB.GetLastRecordingTime(r.Context(), id)
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
@@ -707,7 +708,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// injected here — so push_targets/recording_enabled were missing and
 		// audio_enabled serialized as its zero value (false), making any caller
 		// that trusted the PUT response see its just-saved data "missing" (#297).
-		injectYAMLConfigFields(row, h.config)
+		injectYAMLConfigFields(row, s.deps.Config)
 		cameraRowForAPI(row)
 		writeJSON(w, http.StatusOK, row)
 	} else {
@@ -715,12 +716,12 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
 
 	// Verify camera exists in DB
-	cam, err := h.db.GetCamera(ctx, id)
+	cam, err := s.deps.DB.GetCamera(ctx, id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
@@ -737,140 +738,45 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 
 	// Archive the camera: stops recorder, merges segments, marks archived in DB, removes from config.
 	// This preserves the camera row and recordings for the archive view.
-	if h.camMgr != nil {
+	if s.deps.Cam != nil {
 		// Check if camera is managed (in config). Orphaned DB-only cameras skip the
 		// CameraManager mutex entirely to avoid blocking on merge/stop operations.
-		if h.camMgr.GetCameraConfig(id) != nil {
-			if err := h.camMgr.ArchiveCamera(ctx, id); err != nil {
+		if s.deps.Cam.GetCameraConfig(id) != nil {
+			if err := s.deps.Cam.ArchiveCamera(ctx, id); err != nil {
 				logger.Warn("failed to archive camera via manager, archiving in DB", "camera_id", id, "error", err)
-				if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
+				if dbErr := s.deps.DB.ArchiveCameraDB(ctx, id); dbErr != nil {
 					WriteError(w, http.StatusInternalServerError, "failed to archive camera")
 					return
 				}
-				if _, recErr := h.db.ArchiveAllRecordings(ctx, id); recErr != nil {
+				if _, recErr := s.deps.DB.ArchiveAllRecordings(ctx, id); recErr != nil {
 					logger.Warn("failed to archive recordings", "camera_id", id, "error", recErr)
 				}
 			}
 		} else {
 			// Orphaned camera (not in config) — archive directly in DB, no mutex needed.
 			logger.Info("archiving orphaned camera directly in DB", "camera_id", id)
-			if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
+			if dbErr := s.deps.DB.ArchiveCameraDB(ctx, id); dbErr != nil {
 				WriteError(w, http.StatusInternalServerError, "failed to archive camera")
 				return
 			}
-			if _, recErr := h.db.ArchiveAllRecordings(ctx, id); recErr != nil {
+			if _, recErr := s.deps.DB.ArchiveAllRecordings(ctx, id); recErr != nil {
 				logger.Warn("failed to archive recordings", "camera_id", id, "error", recErr)
 			}
 		}
 	} else {
 		// No camera manager — mark archived in DB directly
-		if err := h.db.ArchiveCameraDB(ctx, id); err != nil {
+		if err := s.deps.DB.ArchiveCameraDB(ctx, id); err != nil {
 			WriteError(w, http.StatusInternalServerError, "failed to archive camera")
 			return
 		}
-		if _, err := h.db.ArchiveAllRecordings(ctx, id); err != nil {
+		if _, err := s.deps.DB.ArchiveAllRecordings(ctx, id); err != nil {
 			logger.Warn("failed to archive recordings", "camera_id", id, "error", err)
 		}
 	}
 
-	if h.mergeScheduler != nil {
-		h.mergeScheduler.Remove(id)
+	if s.deps.MergeScheduler != nil {
+		s.deps.MergeScheduler.Remove(id)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
-}
-
-func (h *Handler) registerCameraRoutes(r chi.Router) {
-	r.Route("/api/cameras", func(r chi.Router) {
-		r.Get("/", h.handleListCameras)
-		r.Post("/", h.handleCreateCamera)
-		r.Post("/test-connection", h.handleTestConnection)
-		// Group registry (v37) — empty-group persistence + rename/delete that
-		// walk the member cameras. /groups/order (v38) is registered before
-		// the /{name} param route; chi prefers the literal.
-		r.Route("/groups", func(r chi.Router) {
-			r.Get("/", h.handleListCameraGroups)
-			r.Post("/", h.handleCreateCameraGroup)
-			r.Put("/order", h.handleSetCameraGroupsOrder)
-			r.Put("/{name}", h.handleRenameCameraGroup)
-			r.Delete("/{name}", h.handleDeleteCameraGroup)
-		})
-		r.Route("/{id}", func(r chi.Router) {
-			r.Get("/", h.handleGetCamera)
-			r.Put("/", h.handleUpdateCamera)
-			r.Delete("/", h.handleDeleteCamera)
-			// Live egress (WS/HLS/WHEP/FLV/MJPEG), stills (snapshot/latest-frame),
-			// protocol capabilities and the flow snapshot live in the streamsapi
-			// domain package (registered flat from Routes — chi forbids mounting
-			// the same subtree pattern twice).
-			// Dual-spectrum spot-temperature grid (proxied device readout)
-			r.Get("/thermal/frame", h.handleThermalFrame)
-			// P4 temperature history (minute-aggregated, playback curve)
-			r.Get("/thermal/history", h.handleThermalHistory)
-			// Per-camera frame-trace sampling window (#482)
-			r.Get("/trace", h.handleCameraTrace)
-			r.Post("/trace", h.handleCameraTrace)
-			r.Delete("/trace", h.handleCameraTrace)
-			// GB28181 voice intercom (talk): WS ingest + status (#341)
-			r.Get("/gb28181/talk", h.handleGB28181TalkWS)
-			r.Get("/gb28181/talk/status", h.handleGB28181TalkStatus)
-			r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
-			r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
-			r.Post("/ptz/move", h.handlePTZMove)
-			r.Post("/ptz/stop", h.handlePTZStop)
-			r.Get("/ptz/status", h.handlePTZStatus)
-			r.Get("/ptz/presets", h.handlePTZGetPresets)
-			r.Post("/ptz/presets", h.handlePTZCreatePreset)
-			r.Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
-			r.Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
-			r.Get("/snapshot/uri", h.handleSnapshotGetUri)
-			r.Get("/imaging/settings", h.handleImagingGetSettings)
-			r.Put("/imaging/settings", h.handleImagingSetSettings)
-			r.Get("/imaging/options", h.handleImagingGetOptions)
-			// Device management
-			r.Post("/onvif/reboot", h.handleONVIFReboot)
-			r.Get("/onvif/network", h.handleONVIFGetNetwork)
-			r.Put("/onvif/network", h.handleONVIFSetNetwork)
-			r.Get("/onvif/users", h.handleONVIFGetUsers)
-			r.Post("/onvif/users", h.handleONVIFCreateUsers)
-			r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
-			r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
-			// Camera time-sync (#time-sync): status read is credential-free;
-			// the two write endpoints need camera admin credentials.
-			r.Get("/time", h.handleCameraTimeStatus)
-			r.Post("/time/sync", h.handleCameraTimeSync)
-			r.Post("/time/ntp", h.handleCameraTimeNTP)
-			r.Get("/stats", h.handleCameraRecordingStats)
-			// Camera-specific events (SSE)
-			r.Get("/events", h.handleCameraEvents)
-			r.Post("/start", h.handleStartCamera)
-			r.Post("/stop", h.handleStopCamera)
-			// Activate a pending_activation camera: supply credentials and start
-			// its recorder. Used by the auto-discover flow.
-			r.Post("/activate", h.handleActivateCamera)
-			// Manually trigger IP self-healing for a camera whose address changed.
-			r.Post("/rediscover", h.handleRediscoverCamera)
-			// External adaptive-recording trigger (issue #478): a semantic
-			// classifier running outside the NVR (or a test) forces a
-			// timelapse→normal transition with the usual GOP + audio back-fill.
-			r.Post("/adaptive/trigger", h.handleAdaptiveTrigger)
-			// Camera-side ONVIF motion subscription diagnostics (#711): the
-			// "订阅挂了 or 相机没事件" discriminator for the camera form's
-			// status line.
-			r.Get("/onvif-events", h.handleONVIFEventsStatus)
-			// Xiaomi-specific PTZ and device info endpoints
-			r.Route("/xiaomi", func(r chi.Router) {
-				r.Post("/ptz/move", h.handleXiaomiPTZMove)
-				r.Post("/ptz/stop", h.handleXiaomiPTZStop)
-				r.Get("/device-info", h.handleXiaomiDeviceInfo)
-				// Xiaomi two-way audio endpoints
-				r.Post("/two-way-audio/start", h.handleStartTwoWayAudio)
-				r.Post("/two-way-audio/stop", h.handleStopTwoWayAudio)
-			})
-		})
-	})
-	// Push-out relay status (per-camera) — flat route, kept with cameras
-	r.Get("/api/cameras/{id}/push-status", h.handleCameraPushStatus)
-	// Per-camera health (flat route)
-	r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
 }

@@ -1,9 +1,10 @@
-package api
+package gbapi
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"hash/crc32"
 	"log/slog"
@@ -22,7 +23,7 @@ import (
 // --- GB28181 Device Handlers ---
 
 // handleListGB28181Devices returns all registered GB28181 devices with ETag support.
-func (h *Handler) handleListGB28181Devices(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleListGB28181Devices(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	limitStr := r.URL.Query().Get("limit")
@@ -40,7 +41,7 @@ func (h *Handler) handleListGB28181Devices(w http.ResponseWriter, r *http.Reques
 		limit = 500
 	}
 
-	devices, err := h.db.ListGB28181Devices(ctx)
+	devices, err := s.deps.DB.ListGB28181Devices(ctx)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list devices")
 		return
@@ -89,7 +90,7 @@ type gb28181ChannelResponse struct {
 }
 
 // handleListGB28181Channels returns the channels for a specific GB28181 device.
-func (h *Handler) handleListGB28181Channels(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleListGB28181Channels(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	deviceID := chi.URLParam(r, "id")
 
@@ -98,7 +99,7 @@ func (h *Handler) handleListGB28181Channels(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	dev, err := h.db.GetGB28181Device(ctx, deviceID)
+	dev, err := s.deps.DB.GetGB28181Device(ctx, deviceID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to query device")
 		return
@@ -108,7 +109,7 @@ func (h *Handler) handleListGB28181Channels(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	channels, err := h.db.ListGB28181Channels(ctx, deviceID)
+	channels, err := s.deps.DB.ListGB28181Channels(ctx, deviceID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list channels")
 		return
@@ -117,12 +118,12 @@ func (h *Handler) handleListGB28181Channels(w http.ResponseWriter, r *http.Reque
 	resp := make([]gb28181ChannelResponse, 0, len(channels))
 	for _, ch := range channels {
 		out := gb28181ChannelResponse{GB28181Channel: ch}
-		if h.gb28181DeviceMgr != nil {
-			if live, ok := h.gb28181DeviceMgr.FindChannel(deviceID, ch.ID); ok {
+		if s.deps.DeviceMgr != nil {
+			if live, ok := s.deps.DeviceMgr.FindChannel(deviceID, ch.ID); ok {
 				out.PTZType = live.PTZType
 			}
 		}
-		out.EnrollBlocked = h.gbChannelEnrollBlocked(deviceID, ch.ID)
+		out.EnrollBlocked = s.gbChannelEnrollBlocked(deviceID, ch.ID)
 		resp = append(resp, out)
 	}
 
@@ -133,32 +134,32 @@ func (h *Handler) handleListGB28181Channels(w http.ResponseWriter, r *http.Reque
 // for the channel ("" when it has, or when nothing blocks it). Mirrors the
 // L1 IP-collision branch of camera.EnsureGB28181Camera so the UI can surface
 // suppressed channels instead of leaving them invisible (#596).
-func (h *Handler) gbChannelEnrollBlocked(deviceID, channelID string) string {
-	if h.camMgr == nil {
+func (s *server) gbChannelEnrollBlocked(deviceID, channelID string) string {
+	if s.deps.Cam == nil {
 		return ""
 	}
-	if _, enrolled := h.camMgr.GB28181CameraIDByChannel(deviceID, channelID); enrolled {
+	if _, enrolled := s.deps.Cam.GB28181CameraIDByChannel(deviceID, channelID); enrolled {
 		return ""
 	}
-	if h.config != nil && h.config.GB28181.AllowSameIPEnroll {
+	if s.deps.Config != nil && s.deps.Config.GB28181.AllowSameIPEnroll {
 		return ""
 	}
-	srcIP := h.gbDeviceSourceIP(deviceID)
+	srcIP := s.gbDeviceSourceIP(deviceID)
 	if srcIP == "" {
 		return ""
 	}
-	if existingID, ok := h.camMgr.CameraIDByHostIP(srcIP); ok {
+	if existingID, ok := s.deps.Cam.CameraIDByHostIP(srcIP); ok {
 		return fmt.Sprintf("another camera (%s) already streams from this device IP — set gb28181.allow_same_ip_enroll to enroll both", existingID)
 	}
 	return ""
 }
 
 // gbDeviceSourceIP returns the host part of the device's SIP source address.
-func (h *Handler) gbDeviceSourceIP(deviceID string) string {
-	if h.gb28181DeviceMgr == nil {
+func (s *server) gbDeviceSourceIP(deviceID string) string {
+	if s.deps.DeviceMgr == nil {
 		return ""
 	}
-	d, ok := h.gb28181DeviceMgr.Device(deviceID)
+	d, ok := s.deps.DeviceMgr.Device(deviceID)
 	if !ok {
 		return ""
 	}
@@ -173,7 +174,7 @@ func (h *Handler) gbDeviceSourceIP(deviceID string) string {
 
 // handleCatalogRefresh triggers a SIP MESSAGE catalog request to the device.
 // Returns 202 Accepted as the catalog refresh is asynchronous.
-func (h *Handler) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	deviceID := chi.URLParam(r, "id")
 
@@ -182,7 +183,7 @@ func (h *Handler) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dev, err := h.db.GetGB28181Device(ctx, deviceID)
+	dev, err := s.deps.DB.GetGB28181Device(ctx, deviceID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to query device")
 		return
@@ -201,11 +202,11 @@ func (h *Handler) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 	// Send the SIP MESSAGE Catalog query to the device. The device responds
 	// asynchronously with its channel list, which the SIP server's
 	// handleMessage parses and persists to the DB.
-	if h.gb28181Catalog == nil {
+	if s.deps.Catalog == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 catalog controller not available")
 		return
 	}
-	if err := h.gb28181Catalog.RequestCatalog(deviceID); err != nil {
+	if err := s.deps.Catalog.RequestCatalog(deviceID); err != nil {
 		slog.Error("failed to send GB28181 catalog query", "device_id", deviceID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to send catalog query")
 		return
@@ -223,7 +224,7 @@ func (h *Handler) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 
 // handleInviteChannel invites a channel to send media (INVITE).
 // Returns 202 Accepted as the session establishment is asynchronous.
-func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 
 	if channelID == "" {
@@ -233,9 +234,9 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 
 	var deviceID string
 	var found bool
-	if h.gb28181DeviceMgr != nil {
-		for _, dev := range h.gb28181DeviceMgr.AllDevices() {
-			if _, ok := h.gb28181DeviceMgr.FindChannel(dev.ID, channelID); ok {
+	if s.deps.DeviceMgr != nil {
+		for _, dev := range s.deps.DeviceMgr.AllDevices() {
+			if _, ok := s.deps.DeviceMgr.FindChannel(dev.ID, channelID); ok {
 				deviceID = dev.ID
 				found = true
 				break
@@ -248,7 +249,7 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dev, ok := h.gb28181DeviceMgr.Device(deviceID)
+	dev, ok := s.deps.DeviceMgr.Device(deviceID)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "device not found")
 		return
@@ -260,12 +261,12 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send the SIP INVITE via the SIP server's InviteChannel method.
-	if h.gb28181Inviter == nil {
+	if s.deps.Inviter == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 invite not available")
 		return
 	}
 	slog.Info("GB28181 channel invite requested", "device_id", deviceID, "channel_id", channelID)
-	if err := h.gb28181Inviter.InviteChannel(deviceID, channelID); err != nil {
+	if err := s.deps.Inviter.InviteChannel(deviceID, channelID); err != nil {
 		slog.Error("failed to send GB28181 INVITE", "channel_id", channelID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to send INVITE")
 		return
@@ -280,7 +281,7 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 // handleByeChannel stops a channel's media session: transmits a SIP BYE to
 // the device, tears down the local receiver, and flips the bound camera's
 // recorder back to Reconnecting. Requires the SIP server (bye sender).
-func (h *Handler) handleByeChannel(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleByeChannel(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 
 	if channelID == "" {
@@ -288,12 +289,12 @@ func (h *Handler) handleByeChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.gb28181Bye == nil {
+	if s.deps.Bye == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 BYE not available")
 		return
 	}
 
-	if err := h.gb28181Bye.ByeChannelByID(channelID); err != nil {
+	if err := s.deps.Bye.ByeChannelByID(channelID); err != nil {
 		slog.Error("failed to stop GB28181 session", "channel_id", channelID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to stop session")
 		return
@@ -318,14 +319,14 @@ type ptzChannelRequest struct {
 }
 
 // handlePTZChannel sends a GB/T 28181 DeviceControl PTZ command to a channel.
-func (h *Handler) handlePTZChannel(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePTZChannel(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
 		return
 	}
 
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
@@ -342,7 +343,7 @@ func (h *Handler) handlePTZChannel(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("GB28181 channel PTZ requested", "channel_id", channelID, "direction", req.Direction)
 
-	if err := h.gb28181PTZ.SendPTZ(channelID, req.Direction, req.Speed); err != nil {
+	if err := s.deps.PTZ.SendPTZ(channelID, req.Direction, req.Speed); err != nil {
 		switch {
 		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
@@ -374,13 +375,13 @@ type lensControlRequest struct {
 
 // handleChannelLensControl sends an FI lens instruction (GB/T 28181-2022
 // § A.3.3 — iris/focus) to a channel via the PTZCmd transport.
-func (h *Handler) handleChannelLensControl(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelLensControl(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
@@ -407,7 +408,7 @@ func (h *Handler) handleChannelLensControl(w http.ResponseWriter, r *http.Reques
 
 	slog.Info("GB28181 channel lens control requested", "channel_id", channelID, "action", req.Action)
 
-	if err := h.gb28181PTZ.SendFI(channelID, req.Action, req.Speed); err != nil {
+	if err := s.deps.PTZ.SendFI(channelID, req.Action, req.Speed); err != nil {
 		switch {
 		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
@@ -434,13 +435,13 @@ func (h *Handler) handleChannelLensControl(w http.ResponseWriter, r *http.Reques
 // handleChannelAuxSwitch toggles a channel auxiliary switch (GB/T 28181-2022
 // § A.3.7 — wiper/light). switch is the switch number 1-255 (1 = wiper per
 // the standard; 2 = light by convention).
-func (h *Handler) handleChannelAuxSwitch(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelAuxSwitch(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
@@ -459,7 +460,7 @@ func (h *Handler) handleChannelAuxSwitch(w http.ResponseWriter, r *http.Request)
 
 	slog.Info("GB28181 channel aux switch requested", "channel_id", channelID, "switch", req.Switch, "on", req.On)
 
-	if err := h.gb28181PTZ.SendAuxSwitch(channelID, byte(req.Switch), req.On); err != nil {
+	if err := s.deps.PTZ.SendAuxSwitch(channelID, byte(req.Switch), req.On); err != nil {
 		switch {
 		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
@@ -493,10 +494,10 @@ type gb28181PresetResponse struct {
 	Name  string `json:"name"`
 }
 
-func (h *Handler) handleGB28181PTZGetPresets(w http.ResponseWriter, r *http.Request, cameraID string) {
+func (s *server) handleGB28181PTZGetPresets(w http.ResponseWriter, r *http.Request, cameraID string) {
 	presets := []gb28181PresetResponse{}
-	if h.db != nil {
-		rows, err := h.db.ListPTZPresets(r.Context(), cameraID)
+	if s.deps.DB != nil {
+		rows, err := s.deps.DB.ListPTZPresets(r.Context(), cameraID)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "failed to list presets")
 			return
@@ -508,7 +509,7 @@ func (h *Handler) handleGB28181PTZGetPresets(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]interface{}{"presets": presets})
 }
 
-func (h *Handler) handleGB28181PTZCreatePreset(w http.ResponseWriter, r *http.Request, cameraID string) {
+func (s *server) handleGB28181PTZCreatePreset(w http.ResponseWriter, r *http.Request, cameraID string) {
 	var req struct {
 		Name string `json:"name"`
 	}
@@ -520,20 +521,20 @@ func (h *Handler) handleGB28181PTZCreatePreset(w http.ResponseWriter, r *http.Re
 		WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	channelID := h.gb28181ChannelID(cameraID)
+	channelID := s.gb28181ChannelID(cameraID)
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
-	if h.db == nil {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	token, ok := h.db.NextPTZPresetToken(r.Context(), cameraID)
+	token, ok := s.deps.DB.NextPTZPresetToken(r.Context(), cameraID)
 	if !ok {
 		WriteError(w, http.StatusConflict, "all 255 preset slots are in use")
 		return
@@ -546,12 +547,12 @@ func (h *Handler) handleGB28181PTZCreatePreset(w http.ResponseWriter, r *http.Re
 	// Best-effort SET on the device: the local row is created regardless —
 	// devices without firmware preset support still get goto/delete commands
 	// once the firmware catches up.
-	if err := h.gb28181PTZ.SendPTZPreset(channelID, platform.PresetSet, byte(presetNum)); err != nil &&
+	if err := s.deps.PTZ.SendPTZPreset(channelID, platform.PresetSet, byte(presetNum)); err != nil &&
 		!errors.Is(err, platform.ErrPTZUnsupported) {
-		h.mapGB28181PTZError(w, err)
+		s.mapGB28181PTZError(w, err)
 		return
 	}
-	if err := h.db.UpsertPTZPreset(r.Context(), storage.PTZPreset{
+	if err := s.deps.DB.UpsertPTZPreset(r.Context(), storage.PTZPreset{
 		CameraID:  cameraID,
 		Token:     token,
 		Name:      req.Name,
@@ -563,13 +564,13 @@ func (h *Handler) handleGB28181PTZCreatePreset(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
-func (h *Handler) handleGB28181PTZGoToPreset(w http.ResponseWriter, r *http.Request, cameraID, token string) {
-	channelID := h.gb28181ChannelID(cameraID)
+func (s *server) handleGB28181PTZGoToPreset(w http.ResponseWriter, r *http.Request, cameraID, token string) {
+	channelID := s.gb28181ChannelID(cameraID)
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
@@ -578,20 +579,20 @@ func (h *Handler) handleGB28181PTZGoToPreset(w http.ResponseWriter, r *http.Requ
 		WriteError(w, http.StatusBadRequest, "invalid preset token")
 		return
 	}
-	if err := h.gb28181PTZ.SendPTZPreset(channelID, platform.PresetCall, byte(presetNum)); err != nil {
-		h.mapGB28181PTZError(w, err)
+	if err := s.deps.PTZ.SendPTZPreset(channelID, platform.PresetCall, byte(presetNum)); err != nil {
+		s.mapGB28181PTZError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (h *Handler) handleGB28181PTZDeletePreset(w http.ResponseWriter, r *http.Request, cameraID, token string) {
-	channelID := h.gb28181ChannelID(cameraID)
+func (s *server) handleGB28181PTZDeletePreset(w http.ResponseWriter, r *http.Request, cameraID, token string) {
+	channelID := s.gb28181ChannelID(cameraID)
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
@@ -600,13 +601,13 @@ func (h *Handler) handleGB28181PTZDeletePreset(w http.ResponseWriter, r *http.Re
 		WriteError(w, http.StatusBadRequest, "invalid preset token")
 		return
 	}
-	if err := h.gb28181PTZ.SendPTZPreset(channelID, platform.PresetDelete, byte(presetNum)); err != nil &&
+	if err := s.deps.PTZ.SendPTZPreset(channelID, platform.PresetDelete, byte(presetNum)); err != nil &&
 		!errors.Is(err, platform.ErrPTZUnsupported) {
-		h.mapGB28181PTZError(w, err)
+		s.mapGB28181PTZError(w, err)
 		return
 	}
-	if h.db != nil {
-		if err := h.db.DeletePTZPreset(r.Context(), cameraID, token); err != nil {
+	if s.deps.DB != nil {
+		if err := s.deps.DB.DeletePTZPreset(r.Context(), cameraID, token); err != nil {
 			WriteError(w, http.StatusInternalServerError, "failed to delete preset")
 			return
 		}
@@ -615,7 +616,7 @@ func (h *Handler) handleGB28181PTZDeletePreset(w http.ResponseWriter, r *http.Re
 }
 
 // mapGB28181PTZError maps PTZ controller errors to HTTP status codes.
-func (h *Handler) mapGB28181PTZError(w http.ResponseWriter, err error) {
+func (s *server) mapGB28181PTZError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, platform.ErrChannelNotFound):
 		WriteError(w, http.StatusNotFound, err.Error())
@@ -641,19 +642,19 @@ func writeGBRecordError(w http.ResponseWriter, err error, deviceFailStatus int) 
 	)
 	switch {
 	case errors.As(err, &una):
-		writeAPIError(w, http.StatusServiceUnavailable, err)
+		httpx.WriteAPIError(w, http.StatusServiceUnavailable, err)
 	case errors.As(err, &nf):
-		writeAPIError(w, http.StatusNotFound, err)
+		httpx.WriteAPIError(w, http.StatusNotFound, err)
 	case errors.As(err, &rg):
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 	default:
-		writeAPIError(w, deviceFailStatus, err)
+		httpx.WriteAPIError(w, deviceFailStatus, err)
 	}
 }
 
 // handleChannelRecords returns the device-side recording index for a time
 // range (RecordInfo query + paged response correlation, #337).
-func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
@@ -670,7 +671,7 @@ func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := h.gb28181Records.Records(channelID, start, end)
+	records, err := s.deps.Records.Records(channelID, start, end)
 	if err != nil {
 		writeGBRecordError(w, err, http.StatusBadGateway)
 		return
@@ -685,7 +686,7 @@ func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 // handleChannelPlaybackStart starts a device-recording fetch: a playback
 // INVITE whose RTP/PS stream is muxed into a normal MiBee recording for the
 // bound camera. One fetch per channel — a running fetch is replaced.
-func (h *Handler) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
@@ -710,7 +711,7 @@ func (h *Handler) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := h.gb28181Records.StartPlayback(channelID, start, end); err != nil {
+	if err := s.deps.Records.StartPlayback(channelID, start, end); err != nil {
 		writeGBRecordError(w, err, http.StatusBadGateway)
 		return
 	}
@@ -723,7 +724,7 @@ func (h *Handler) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Requ
 // handleChannelDownloadStart starts a device-recording download (#378): an
 // s=Download INVITE — the device streams at file speed and the media is muxed
 // into the bound camera's recordings. One fetch per channel.
-func (h *Handler) handleChannelDownloadStart(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelDownloadStart(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
@@ -748,7 +749,7 @@ func (h *Handler) handleChannelDownloadStart(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := h.gb28181Records.StartDownload(channelID, start, end); err != nil {
+	if err := s.deps.Records.StartDownload(channelID, start, end); err != nil {
 		writeGBRecordError(w, err, http.StatusBadGateway)
 		return
 	}
@@ -759,9 +760,9 @@ func (h *Handler) handleChannelDownloadStart(w http.ResponseWriter, r *http.Requ
 }
 
 // handleChannelPlaybackStatus reports the running fetch (404 when idle).
-func (h *Handler) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
-	st, ok, err := h.gb28181Records.PlaybackStatus(channelID)
+	st, ok, err := s.deps.Records.PlaybackStatus(channelID)
 	if err != nil {
 		writeGBRecordError(w, err, http.StatusServiceUnavailable)
 		return
@@ -775,9 +776,9 @@ func (h *Handler) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Req
 
 // handleChannelPlaybackStop stops a running fetch (SIP BYE + finalize the
 // partially-fetched recording).
-func (h *Handler) handleChannelPlaybackStop(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelPlaybackStop(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
-	if err := h.gb28181Records.StopPlayback(channelID); err != nil {
+	if err := s.deps.Records.StopPlayback(channelID); err != nil {
 		writeGBRecordError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -786,7 +787,7 @@ func (h *Handler) handleChannelPlaybackStop(w http.ResponseWriter, r *http.Reque
 
 // handleChannelPlaybackControl drives a running fetch via SIP INFO
 // MANSRTSP: pause / resume / seek (optional scale + position seconds).
-func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	var req struct {
 		Action   string  `json:"action"`
@@ -803,7 +804,7 @@ func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Re
 		WriteError(w, http.StatusBadRequest, "action must be pause, resume, or seek")
 		return
 	}
-	if err := h.gb28181Records.PlaybackControl(channelID, req.Action, req.Scale, req.Position); err != nil {
+	if err := s.deps.Records.PlaybackControl(channelID, req.Action, req.Scale, req.Position); err != nil {
 		writeGBRecordError(w, err, http.StatusConflict)
 		return
 	}
@@ -823,13 +824,13 @@ var gbTalkUpgrader = websocket.Upgrader{
 // speaker: GET /api/cameras/{id}/gb28181/talk upgrades to a WebSocket whose
 // binary frames carry G.711 A-law chunks (encoded browser-side). The INVITE
 // handshake runs on connect; closing the socket BYEs the session.
-func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if h.gb28181Media == nil {
+	if s.deps.Media == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
 		return
 	}
-	cam := h.camMgr.GetCameraConfig(cameraID)
+	cam := s.deps.Cam.GetCameraConfig(cameraID)
 	if cam == nil || cam.Protocol != "gb28181" {
 		WriteError(w, http.StatusBadRequest, "camera is not a GB28181 camera")
 		return
@@ -841,12 +842,12 @@ func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.gb28181Media.StartTalk(cameraID, deviceID, channelID); err != nil {
+	if err := s.deps.Media.StartTalk(cameraID, deviceID, channelID); err != nil {
 		WriteError(w, http.StatusBadGateway, fmt.Sprintf("talk setup failed: %v", err))
 		return
 	}
 	defer func() {
-		if err := h.gb28181Media.StopTalk(channelID); err != nil {
+		if err := s.deps.Media.StopTalk(channelID); err != nil {
 			slog.Warn("gb28181: stop talk on WS close", "camera", cameraID, "error", err)
 		}
 	}()
@@ -860,7 +861,7 @@ func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
 	// Full duplex (#341 + gb28181-go #141): the device's return audio
 	// (sendrecv uplink leg) streams back over this same socket as binary
 	// frames. A nil channel (no registry wired) keeps the socket send-only.
-	upCh, unsub := h.gb28181Media.SubscribeTalkUplink(channelID)
+	upCh, unsub := s.deps.Media.SubscribeTalkUplink(channelID)
 	var writerDone <-chan struct{}
 	if upCh != nil {
 		done := make(chan struct{})
@@ -889,44 +890,44 @@ func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
 		if mt != websocket.BinaryMessage {
 			continue
 		}
-		h.gb28181Media.WriteTalkAudio(channelID, data)
+		s.deps.Media.WriteTalkAudio(channelID, data)
 	}
 }
 
 // handleGB28181TalkStatus reports whether a camera's intercom is active.
-func (h *Handler) handleGB28181TalkStatus(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGB28181TalkStatus(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if h.gb28181Media == nil {
+	if s.deps.Media == nil {
 		writeJSON(w, http.StatusOK, platform.TalkStatus{Active: false})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.gb28181Media.TalkStatusFor(cameraID))
+	writeJSON(w, http.StatusOK, s.deps.Media.TalkStatusFor(cameraID))
 }
 
 // handleGB28181DeviceAlarms returns a device's recent alarm notifications.
-func (h *Handler) handleGB28181DeviceAlarms(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGB28181DeviceAlarms(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
-	if h.gb28181Media == nil {
+	if s.deps.Media == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.gb28181Media.GB28181Alarms(deviceID))
+	writeJSON(w, http.StatusOK, s.deps.Media.GB28181Alarms(deviceID))
 }
 
 // handleGB28181DevicePositions returns a device's recent mobile positions.
-func (h *Handler) handleGB28181DevicePositions(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGB28181DevicePositions(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
-	if h.gb28181Media == nil {
+	if s.deps.Media == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.gb28181Media.GB28181Positions(deviceID))
+	writeJSON(w, http.StatusOK, s.deps.Media.GB28181Positions(deviceID))
 }
 
 // handleGB28181CascadeStatus reports the lower-level cascade client's
 // registration state (Settings → GB28181 status card).
-func (h *Handler) handleGB28181CascadeStatus(w http.ResponseWriter, _ *http.Request) {
-	if h.gb28181Cascade == nil {
+func (s *server) handleGB28181CascadeStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.deps.Cascade == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled":  false,
 			"online":   false,
@@ -936,10 +937,10 @@ func (h *Handler) handleGB28181CascadeStatus(w http.ResponseWriter, _ *http.Requ
 	}
 	resp := map[string]any{
 		"enabled":  true,
-		"online":   h.gb28181Cascade.Online(),
-		"forwards": h.gb28181Cascade.ForwardCount(),
+		"online":   s.deps.Cascade.Online(),
+		"forwards": s.deps.Cascade.ForwardCount(),
 	}
-	if since, ok := h.gb28181Cascade.RegistrationSince(); ok {
+	if since, ok := s.deps.Cascade.RegistrationSince(); ok {
 		resp["registered_for_seconds"] = int(since.Seconds())
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -948,7 +949,7 @@ func (h *Handler) handleGB28181CascadeStatus(w http.ResponseWriter, _ *http.Requ
 // handleChannelDeviceControl sends a non-PTZ DeviceControl instruction to a
 // channel (#379): remote record start/stop, arm/disarm, alarm reset, reboot,
 // home-position reset. TeleBoot requires confirm=true (destructive).
-func (h *Handler) handleChannelDeviceControl(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleChannelDeviceControl(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	var req struct {
 		Command string `json:"command"`
@@ -981,11 +982,11 @@ func (h *Handler) handleChannelDeviceControl(w http.ResponseWriter, r *http.Requ
 		WriteError(w, http.StatusBadRequest, "tele_boot reboots the device — retry with confirm=true")
 		return
 	}
-	if h.gb28181PTZ == nil {
+	if s.deps.PTZ == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
-	if err := h.gb28181PTZ.SendDeviceControl(channelID, c.element, c.value); err != nil {
+	if err := s.deps.PTZ.SendDeviceControl(channelID, c.element, c.value); err != nil {
 		slog.Warn("GB28181 device control failed", "channel_id", channelID, "command", req.Command, "error", err)
 		WriteError(w, http.StatusBadGateway, "device control failed: "+err.Error())
 		return

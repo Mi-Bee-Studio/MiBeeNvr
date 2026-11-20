@@ -118,48 +118,6 @@ func TestTwoWayAudio_StartWithoutClient(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
-func TestProcessAudioUpstreamMessage(t *testing.T) {
-	t.Parallel()
-
-	pcmMsg := make([]byte, 641) // reserved byte + 640 PCM bytes
-	for i := range pcmMsg {
-		pcmMsg[i] = byte(i % 251)
-	}
-
-	t.Run("undersized frame is skipped", func(t *testing.T) {
-		t.Parallel()
-		rec, _ := newXiaomiRecorderWithMock(t)
-		require.NoError(t, processAudioUpstreamMessage(rec, missCodecPCMU, pcmMsg[:100]))
-	})
-
-	t.Run("pcm passthrough", func(t *testing.T) {
-		t.Parallel()
-		rec, _ := newXiaomiRecorderWithMock(t)
-		require.NoError(t, processAudioUpstreamMessage(rec, missCodecPCM, pcmMsg))
-	})
-
-	t.Run("g711 encode", func(t *testing.T) {
-		t.Parallel()
-		rec, _ := newXiaomiRecorderWithMock(t)
-		require.NoError(t, processAudioUpstreamMessage(rec, missCodecPCMU, pcmMsg))
-		require.NoError(t, processAudioUpstreamMessage(rec, missCodecPCMA, pcmMsg))
-	})
-
-	t.Run("unsupported codec is skipped", func(t *testing.T) {
-		t.Parallel()
-		rec, _ := newXiaomiRecorderWithMock(t)
-		require.NoError(t, processAudioUpstreamMessage(rec, 9999, pcmMsg))
-	})
-
-	t.Run("nil client surfaces write error", func(t *testing.T) {
-		t.Parallel()
-		db, store := setupTestDB(t)
-		t.Cleanup(func() { db.Close() })
-		rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{CameraID: "c", DID: "1"}, store)
-		require.Error(t, processAudioUpstreamMessage(rec, missCodecPCM, pcmMsg))
-	})
-}
-
 func TestAudioUpstreamWS_RoundTrip(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

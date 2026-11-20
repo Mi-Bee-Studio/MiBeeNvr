@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 // Zero-touch camera onboarding API (#1120). The service is optional — the
 // handler answers 409 when the feature is disabled (default) or not wired.
@@ -20,29 +20,25 @@ type OnboardingService interface {
 	Job(id string) (onboarding.Job, bool)
 }
 
-func (h *Handler) SetOnboardingService(s OnboardingService) {
-	h.onboarding = s
-}
-
 // onboardingReady answers with 409 when the feature is unavailable.
-func (h *Handler) onboardingReady(w http.ResponseWriter) *OnboardingService {
-	if h.onboarding == nil {
+func (s *server) onboardingReady(w http.ResponseWriter) *OnboardingService {
+	if s.deps.Onboarding == nil {
 		WriteError(w, http.StatusConflict, "camera onboarding is not enabled (camera_onboarding.enabled)")
 		return nil
 	}
-	return &h.onboarding
+	return &s.deps.Onboarding
 }
 
-func (h *Handler) handleOnboardingStatus(w http.ResponseWriter, r *http.Request) {
-	svc := h.onboardingReady(w)
+func (s *server) handleOnboardingStatus(w http.ResponseWriter, r *http.Request) {
+	svc := s.onboardingReady(w)
 	if svc == nil {
 		return
 	}
 	writeJSON(w, http.StatusOK, (*svc).Status())
 }
 
-func (h *Handler) handleOnboardingScan(w http.ResponseWriter, r *http.Request) {
-	svc := h.onboardingReady(w)
+func (s *server) handleOnboardingScan(w http.ResponseWriter, r *http.Request) {
+	svc := s.onboardingReady(w)
 	if svc == nil {
 		return
 	}
@@ -54,8 +50,8 @@ func (h *Handler) handleOnboardingScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": id})
 }
 
-func (h *Handler) handleOnboardingAdopt(w http.ResponseWriter, r *http.Request) {
-	svc := h.onboardingReady(w)
+func (s *server) handleOnboardingAdopt(w http.ResponseWriter, r *http.Request) {
+	svc := s.onboardingReady(w)
 	if svc == nil {
 		return
 	}
@@ -76,8 +72,8 @@ func (h *Handler) handleOnboardingAdopt(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": id})
 }
 
-func (h *Handler) handleOnboardingJob(w http.ResponseWriter, r *http.Request) {
-	svc := h.onboardingReady(w)
+func (s *server) handleOnboardingJob(w http.ResponseWriter, r *http.Request) {
+	svc := s.onboardingReady(w)
 	if svc == nil {
 		return
 	}
@@ -93,9 +89,3 @@ func (h *Handler) handleOnboardingJob(w http.ResponseWriter, r *http.Request) {
 // registerOnboardingRoutes registers the zero-touch onboarding endpoints.
 // The handlers answer 409 when the feature is disabled — the routes exist
 // so the UI can probe capability, but nothing runs without the config.
-func (h *Handler) registerOnboardingRoutes(r chi.Router) {
-	r.Get("/api/onboarding/status", h.handleOnboardingStatus)
-	r.Post("/api/onboarding/scan", h.handleOnboardingScan)
-	r.Post("/api/onboarding/adopt", h.handleOnboardingAdopt)
-	r.Get("/api/onboarding/jobs/{id}", h.handleOnboardingJob)
-}

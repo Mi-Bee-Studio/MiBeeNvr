@@ -1,9 +1,10 @@
-package api
+package gbapi
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"log/slog"
 	"net/http"
 	"time"
@@ -14,17 +15,17 @@ import (
 
 // --- ONVIF camera management endpoints ---
 
-func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
-	client, err := h.camMgr.GetONVIFClient(r.Context(), cameraID)
+	client, err := s.deps.Cam.GetONVIFClient(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -48,17 +49,17 @@ func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if !h.requireONVIF(w, r) {
+	if !s.requireONVIF(w, r) {
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
-	client, err := h.camMgr.GetONVIFClient(r.Context(), cameraID)
+	client, err := s.deps.Cam.GetONVIFClient(r.Context(), cameraID)
 	if err != nil {
 		handleONVIFPTZError(w, cameraID, err)
 		return
@@ -72,7 +73,7 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 	}
 
 	// Attach cached device info (lazy — fetched once, cached in camera manager)
-	deviceInfo := h.camMgr.GetCachedDeviceInfo(r.Context(), cameraID)
+	deviceInfo := s.deps.Cam.GetCachedDeviceInfo(r.Context(), cameraID)
 	detailed.DeviceInfo = deviceInfo
 
 	writeJSON(w, http.StatusOK, detailed)
@@ -82,7 +83,7 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 
 // handleONVIFProbe probes a single ONVIF device by sending a WS-Discovery
 // probe via HTTP POST directly to host:port (no multicast needed).
-func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Host    string `json:"host"`
 		Port    int    `json:"port"`
@@ -95,7 +96,7 @@ func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "host is required")
 		return
 	}
-	if !validateIP(req.Host) {
+	if !httpx.ValidateIP(req.Host) {
 		WriteError(w, http.StatusBadRequest, "invalid IP address format")
 		return
 	}
@@ -136,7 +137,7 @@ func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Timeout int `json:"timeout"`
 	}
@@ -161,13 +162,13 @@ func (h *Handler) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	ip := chi.URLParam(r, "ip")
 	if ip == "" {
 		WriteError(w, http.StatusBadRequest, "IP address is required")
 		return
 	}
-	if !validateIP(ip) {
+	if !httpx.ValidateIP(ip) {
 		WriteError(w, http.StatusBadRequest, "invalid IP address format")
 		return
 	}
@@ -192,13 +193,13 @@ func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (h *Handler) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
-	if h.db == nil {
+func (s *server) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusNotFound, "camera not found")
 		return false
 	}
 	cameraID := chi.URLParam(r, "id")
-	camera, err := h.db.GetCamera(r.Context(), cameraID)
+	camera, err := s.deps.DB.GetCamera(r.Context(), cameraID)
 	if err != nil || camera == nil {
 		WriteError(w, http.StatusNotFound, "camera not found")
 		return false
@@ -211,11 +212,11 @@ func (h *Handler) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // cameraProtocol returns the camera's protocol ("" when unknown).
-func (h *Handler) cameraProtocol(r *http.Request, cameraID string) string {
-	if h.db == nil {
+func (s *server) cameraProtocol(r *http.Request, cameraID string) string {
+	if s.deps.DB == nil {
 		return ""
 	}
-	camera, err := h.db.GetCamera(r.Context(), cameraID)
+	camera, err := s.deps.DB.GetCamera(r.Context(), cameraID)
 	if err != nil || camera == nil {
 		return ""
 	}

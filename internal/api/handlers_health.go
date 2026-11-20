@@ -80,27 +80,6 @@ func (h *Handler) handleGetHealthEvents(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleGetCameraHealth returns the health status for a single camera.
-func (h *Handler) handleGetCameraHealth(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "id")
-	if cameraID == "" {
-		WriteError(w, http.StatusBadRequest, "missing camera id")
-		return
-	}
-
-	if h.healthMgr == nil {
-		WriteError(w, http.StatusNotFound, "camera not found")
-		return
-	}
-
-	health := h.healthMgr.GetCameraHealth(cameraID)
-	if health == nil {
-		WriteError(w, http.StatusNotFound, "camera not found")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, health)
-}
-
 // handleGetStability returns stability quality data for all cameras.
 func (h *Handler) handleGetStability(w http.ResponseWriter, r *http.Request) {
 	if h.stabilityProvider == nil {

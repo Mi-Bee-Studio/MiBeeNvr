@@ -1,4 +1,4 @@
-package api
+package camerasapi
 
 import (
 	"encoding/binary"
@@ -69,11 +69,11 @@ const (
 	audioLiveFlushEvery = 500 * time.Millisecond // frequent small flushes: browsers start streaming playback sooner
 )
 
-// audioLiveWavNominalWindow is the listening window the WAV branches declare
+// AudioLiveWavNominalWindow is the listening window the WAV branches declare
 // via Content-Length (a live-listen session far outlasting it is unusual; the
 // client simply re-opens). Var so tests can shrink it to exercise the exact
 // end-of-body path.
-var audioLiveWavNominalWindow = time.Hour
+var AudioLiveWavNominalWindow = time.Hour
 
 // liveAudioFormat carries the per-codec framing for one live session.
 type liveAudioFormat struct {
@@ -89,9 +89,9 @@ type liveAudioFormat struct {
 }
 
 // handleAudioLiveWav: G.711 → streaming PCM WAV (legacy consumers).
-func (h *Handler) handleAudioLiveWav(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleAudioLiveWav(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "cameraID")
-	rec := model.UnwrapDelegate(h.camMgr.GetRecorder(cameraID))
+	rec := model.UnwrapDelegate(s.deps.Cam.GetRecorder(cameraID))
 	ar, ok := rec.(*recorder.AudioRecorder)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "not an audio-source device")
@@ -118,9 +118,9 @@ func (h *Handler) handleAudioLiveWav(w http.ResponseWriter, r *http.Request) {
 // handleAudioLive: format-adaptive zero-decode live audio (see the block
 // comment above). Unknown codecs are refused with a hint rather than served
 // as garbage.
-func (h *Handler) handleAudioLive(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleAudioLive(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "cameraID")
-	rec := model.UnwrapDelegate(h.camMgr.GetRecorder(cameraID))
+	rec := model.UnwrapDelegate(s.deps.Cam.GetRecorder(cameraID))
 	ar, ok := rec.(*recorder.AudioRecorder)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "not an audio-source device")
@@ -286,7 +286,7 @@ func newLiveWavFormat(ar *recorder.AudioRecorder) (liveAudioFormat, error) {
 	// Finite declared length for the WAV branches (#1052): Chromium's WAV
 	// demuxer needs a known resource size; a nominal window keeps the header
 	// honest while staying open for far longer than a live-listen session.
-	nominal := int64(rate) * int64(channels) * 2 * int64(audioLiveWavNominalWindow) / int64(time.Second)
+	nominal := int64(rate) * int64(channels) * 2 * int64(AudioLiveWavNominalWindow) / int64(time.Second)
 	return liveAudioFormat{
 		contentType: "audio/wav",
 		ext:         "wav",
@@ -316,6 +316,12 @@ func adtsFreqIndex(rate int) (byte, bool) {
 // AudioSpecificConfig: audioObjectType, sampling frequency index and channel
 // configuration. ok=false when any field falls outside the ADTS-representable
 // ranges (AOT must be AAC-LC/LTP/Main/SSR, freq index ≤ 12, 1–6 channels).
+// ParseAudioSpecificConfig is the exported form (live-listening tests in the
+// api root assert the ASC fields through the compat reference).
+func ParseAudioSpecificConfig(asc []byte) (objType, freqIdx, ch int, ok bool) {
+	return parseAudioSpecificConfig(asc)
+}
+
 func parseAudioSpecificConfig(asc []byte) (objType, freqIdx, ch int, ok bool) {
 	if len(asc) < 2 {
 		return 0, 0, 0, false
@@ -393,6 +399,10 @@ var oggCRCTable = func() [256]uint32 {
 	}
 	return t
 }()
+
+// OggCRC is the exported form (the api root's live-listening tests assert
+// page CRCs through the compat reference).
+func OggCRC(p []byte) uint32 { return oggCRC(p) }
 
 func oggCRC(p []byte) uint32 {
 	c := uint32(0)

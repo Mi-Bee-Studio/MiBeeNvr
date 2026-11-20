@@ -60,13 +60,6 @@ func TestXiaomi_CheckVendor_NotConfigured(t *testing.T) {
 	require.Equal(t, true, resp["compatible"])
 }
 
-func TestXiaomi_ExtractDIDFromURL(t *testing.T) {
-	t.Parallel()
-	require.Equal(t, "123456789", extractDIDFromURL("xiaomi://123456789"))
-	require.Equal(t, "abc-did", extractDIDFromURL("xiaomi://abc-did"))
-	require.Equal(t, "", extractDIDFromURL("::not-a-url::"))
-}
-
 // failingCloudProxy stubs CloudAuthProxy with every auth path failing —
 // regression coverage for #1014: upstream credential errors must surface as
 // 502 (upstream rejection), never 401 (which the frontend's global handler

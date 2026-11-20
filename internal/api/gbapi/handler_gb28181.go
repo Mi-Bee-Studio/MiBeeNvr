@@ -1,4 +1,4 @@
-package api
+package gbapi
 
 // GB28181 wiring on Handler: the capability interfaces the platform package
 // implements, the setters that attach them, the session-status DTO and the
@@ -7,8 +7,6 @@ package api
 import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
@@ -25,15 +23,9 @@ type GB28181CascadeStatus interface {
 }
 
 // SetGB28181Cascade wires the cascade client for the status endpoint.
-func (h *Handler) SetGB28181Cascade(s GB28181CascadeStatus) {
-	h.gb28181Cascade = s
-}
 
 // SetGB28181Timezone pins the zone used to interpret/format naive GB/T 28181
 // device-clock timestamps (RecordInfo entries). nil keeps time.Local.
-func (h *Handler) SetGB28181Timezone(loc *time.Location) {
-	h.gb28181Records.SetTimezone(loc)
-}
 
 // GB28181InviteSender sends a SIP INVITE to start a media session on a channel.
 // Implemented by the SIP server; declared here to avoid importing sip in Handler.
@@ -42,9 +34,6 @@ type GB28181InviteSender interface {
 }
 
 // SetGB28181Inviter wires the SIP server for the channel INVITE endpoint.
-func (h *Handler) SetGB28181Inviter(s GB28181InviteSender) {
-	h.gb28181Inviter = s
-}
 
 // GB28181SessionStatus mirrors the GB library's session observability for
 // the flow view. The struct lives in streamsapi (flow-response data); this
@@ -53,9 +42,6 @@ type GB28181SessionStatus = streamsapi.GB28181SessionStatus
 
 // SetGB28181Sessions wires the GB28181 session observability provider
 // (live session snapshot + stall-watchdog recycle count).
-func (h *Handler) SetGB28181Sessions(fn func() ([]GB28181SessionStatus, int64)) {
-	h.gb28181Sessions = fn
-}
 
 // GB28181ByeSender stops a channel media session end-to-end (SIP BYE to the
 // device, local receiver teardown, bound-camera recorder state). Implemented
@@ -65,9 +51,6 @@ type GB28181ByeSender interface {
 }
 
 // SetGB28181ByeSender wires the SIP server for the channel BYE endpoint.
-func (h *Handler) SetGB28181ByeSender(s GB28181ByeSender) {
-	h.gb28181Bye = s
-}
 
 // GB28181DeviceMedia is the device-side recording API (RecordInfo query,
 // playback INVITE fetch, MANSRTSP control) implemented by the SIP server;
@@ -110,40 +93,5 @@ type GB28181DeviceMedia interface {
 
 // SetGB28181DeviceMedia wires the SIP server for the device-recording
 // endpoints.
-func (h *Handler) SetGB28181DeviceMedia(s GB28181DeviceMedia) {
-	h.gb28181Media = s
-	h.gb28181Records.SetMedia(s)
-}
 
 // registerGB28181Routes registers GB28181 device and channel endpoints.
-func (h *Handler) registerGB28181Routes(r chi.Router) {
-	r.Route("/api/gb28181", func(r chi.Router) {
-		r.Get("/devices", h.handleListGB28181Devices)
-		r.Get("/cascade/status", h.handleGB28181CascadeStatus)
-		r.Route("/devices/{id}", func(r chi.Router) {
-			r.Get("/channels", h.handleListGB28181Channels)
-			r.Post("/catalog-refresh", h.handleCatalogRefresh)
-			r.Get("/alarms", h.handleGB28181DeviceAlarms)
-			r.Get("/positions", h.handleGB28181DevicePositions)
-		})
-		r.Route("/channels/{id}", func(r chi.Router) {
-			r.Post("/invite", h.handleInviteChannel)
-			r.Post("/bye", h.handleByeChannel)
-			r.Post("/ptz", h.handlePTZChannel)
-			r.Post("/lens", h.handleChannelLensControl)
-			r.Post("/aux-switch", h.handleChannelAuxSwitch)
-			r.Post("/control", h.handleChannelDeviceControl)
-			r.Get("/records", h.handleChannelRecords)
-			r.Post("/playback", h.handleChannelPlaybackStart)
-			r.Get("/playback", h.handleChannelPlaybackStatus)
-			r.Delete("/playback", h.handleChannelPlaybackStop)
-			r.Post("/playback/control", h.handleChannelPlaybackControl)
-			r.Post("/download", h.handleChannelDownloadStart)
-			r.Get("/download", h.handleChannelPlaybackStatus)
-			r.Delete("/download", h.handleChannelPlaybackStop)
-			// GB/T 28181-2022 on-demand capture (#708)
-			r.Post("/snapshot", h.handleGB28181ChannelSnapshot)
-			r.Post("/record", h.handleGB28181ChannelRecord)
-		})
-	})
-}

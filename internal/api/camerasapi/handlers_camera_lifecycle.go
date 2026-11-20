@@ -1,9 +1,10 @@
-package api
+package camerasapi
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"net/http"
 	"time"
 
@@ -11,9 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCameraRecordingStats(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	count, totalSize, err := h.db.GetCameraRecordingStats(r.Context(), id)
+	count, totalSize, err := s.deps.DB.GetCameraRecordingStats(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera stats")
 		return
@@ -21,18 +22,18 @@ func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]interface{}{"recording_count": count, "total_size": totalSize})
 }
 
-func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
-	if err := h.camMgr.StartCamera(r.Context(), id); err != nil {
+	if err := s.deps.Cam.StartCamera(r.Context(), id); err != nil {
 		switch {
 		case errors.As(err, new(*model.CameraNotFoundError)):
-			writeAPIError(w, http.StatusNotFound, err)
+			httpx.WriteAPIError(w, http.StatusNotFound, err)
 		case errors.As(err, new(*model.CameraAlreadyRunningError)):
-			writeAPIError(w, http.StatusConflict, err)
+			httpx.WriteAPIError(w, http.StatusConflict, err)
 		default:
 			logger.Error("failed to start camera", "camera_id", id, "error", err, "path", r.URL.Path)
 			WriteError(w, http.StatusInternalServerError, "failed to start camera")
@@ -53,7 +54,7 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 // flow: an authenticated ONVIF device discovered without valid credentials is
 // persisted as pending_activation; the user supplies credentials via this
 // endpoint to bring it live.
-func (h *Handler) handleActivateCamera(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleActivateCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body struct {
 		Username string `json:"username"`
@@ -63,19 +64,19 @@ func (h *Handler) handleActivateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
-	if err := h.camMgr.ActivateCamera(r.Context(), id, body.Username, body.Password); err != nil {
+	if err := s.deps.Cam.ActivateCamera(r.Context(), id, body.Username, body.Password); err != nil {
 		switch {
 		case errors.As(err, new(*model.CameraNotFoundError)):
-			writeAPIError(w, http.StatusNotFound, err)
+			httpx.WriteAPIError(w, http.StatusNotFound, err)
 		case errors.As(err, new(*model.CameraAlreadyRunningError)):
 			// Idempotent: the recorder auto-restored (e.g. on NVR restart) and raced
 			// with this request. Mirrors handleStartCamera's 409 — the camera is
 			// already in the desired state, not a server error.
-			writeAPIError(w, http.StatusConflict, err)
+			httpx.WriteAPIError(w, http.StatusConflict, err)
 		default:
 			logger.Error("failed to activate camera", "camera_id", id, "error", err, "path", r.URL.Path)
 			WriteError(w, http.StatusInternalServerError, "failed to activate camera")
@@ -85,16 +86,16 @@ func (h *Handler) handleActivateCamera(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "activated"})
 }
 
-func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
-	if err := h.camMgr.StopCamera(r.Context(), id); err != nil {
+	if err := s.deps.Cam.StopCamera(r.Context(), id); err != nil {
 		var cnf *model.CameraNotFoundError
 		if errors.As(err, &cnf) {
-			writeAPIError(w, http.StatusNotFound, err)
+			httpx.WriteAPIError(w, http.StatusNotFound, err)
 		} else {
 			logger.Error("failed to stop camera", "camera_id", id, "error", err, "path", r.URL.Path)
 			WriteError(w, http.StatusInternalServerError, "failed to stop camera")
@@ -113,9 +114,9 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 // network address may have changed (e.g. after an AP reboot across per-subnet
 // DHCP). It scans candidate subnets for a device whose ONVIF serial matches the
 // camera's StableID and, if found, updates the config and reconnects.
-func (h *Handler) handleRediscoverCamera(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleRediscoverCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if h.camMgr == nil {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
@@ -124,12 +125,12 @@ func (h *Handler) handleRediscoverCamera(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	found, err := h.camMgr.RediscoverAndReconnect(ctx, id)
+	found, err := s.deps.Cam.RediscoverAndReconnect(ctx, id)
 	if err != nil {
 		var cnf *model.CameraNotFoundError
 		switch {
 		case errors.As(err, &cnf):
-			writeAPIError(w, http.StatusNotFound, err)
+			httpx.WriteAPIError(w, http.StatusNotFound, err)
 		default:
 			logger.Error("rediscover camera failed", "camera_id", id, "error", err, "path", r.URL.Path)
 			WriteError(w, http.StatusInternalServerError, "rediscovery failed")
@@ -164,8 +165,8 @@ func (h *Handler) handleRediscoverCamera(w http.ResponseWriter, r *http.Request)
 // {"source": "...", "hold": "10s", "dbfs": -23.4} — source/dbfs are
 // diagnostics only; hold (optional duration, 0–10m) extends how long
 // timelapse entry stays deferred after the event.
-func (h *Handler) handleAdaptiveTrigger(w http.ResponseWriter, r *http.Request) {
-	if h.camMgr == nil {
+func (s *server) handleAdaptiveTrigger(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
@@ -188,7 +189,7 @@ func (h *Handler) handleAdaptiveTrigger(w http.ResponseWriter, r *http.Request) 
 		}
 		hold = d
 	}
-	rec := h.camMgr.GetRecorder(id)
+	rec := s.deps.Cam.GetRecorder(id)
 	if rec == nil {
 		WriteError(w, http.StatusNotFound, "camera not found")
 		return
@@ -201,7 +202,7 @@ func (h *Handler) handleAdaptiveTrigger(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := trig.AudioTriggerEvent(time.Now(), hold); err != nil {
-		writeAPIError(w, http.StatusBadRequest, err)
+		httpx.WriteAPIError(w, http.StatusBadRequest, err)
 		return
 	}
 	logger.Info("external adaptive trigger",
@@ -214,11 +215,11 @@ func (h *Handler) handleAdaptiveTrigger(w http.ResponseWriter, r *http.Request) 
 // diagnostics (#711): subscribed/state, event counters, last event and last
 // error — enough to tell "the camera emits nothing" from "the subscription
 // died" at a glance.
-func (h *Handler) handleONVIFEventsStatus(w http.ResponseWriter, r *http.Request) {
-	if h.camMgr == nil {
+func (s *server) handleONVIFEventsStatus(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	id := chi.URLParam(r, "id")
-	writeJSON(w, http.StatusOK, h.camMgr.ONVIFEventsStatus(id))
+	writeJSON(w, http.StatusOK, s.deps.Cam.ONVIFEventsStatus(id))
 }

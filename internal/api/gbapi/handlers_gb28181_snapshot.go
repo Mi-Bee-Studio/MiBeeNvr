@@ -1,4 +1,4 @@
-package api
+package gbapi
 
 import (
 	"encoding/json"
@@ -26,9 +26,9 @@ import (
 // UploadSnapShotFinished. Sessions close on the completion notify or on
 // timeout (spec: no notify within the window = failure).
 
-// gbCommander is the DeviceControl surface these handlers need. Satisfied by
+// GBCommander is the DeviceControl surface these handlers need. Satisfied by
 // *platform.PTZController; narrow interface keeps the handlers testable.
-type gbCommander interface {
+type GBCommander interface {
 	SendSnapShotCmd(channelID string, cmd manscdp.SnapShotCmd) error
 	StartManualRecord(channelID string) error
 	StopManualRecord(channelID string) error
@@ -41,23 +41,17 @@ var gbSnapshotLogger = slogx.Component("gb28181-snapshot")
 const snapshotUploadMaxBytes = 8 << 20
 
 // SetGB28181Commander wires the DeviceControl sender for snapshot/record.
-func (h *Handler) SetGB28181Commander(c gbCommander) {
-	h.gb28181Commander = c
-}
 
 // SetGB28181SnapshotManager wires the snapshot session registry.
-func (h *Handler) SetGB28181SnapshotManager(m *gb28181.SnapshotSessionManager) {
-	h.gb28181SnapMgr = m
-}
 
 // locateGBChannel resolves a channel ID to (deviceID, ok) across registered
 // devices — same scan the invite handler uses.
-func (h *Handler) locateGBChannel(channelID string) (string, bool) {
-	if h.gb28181DeviceMgr == nil {
+func (s *server) locateGBChannel(channelID string) (string, bool) {
+	if s.deps.DeviceMgr == nil {
 		return "", false
 	}
-	for _, dev := range h.gb28181DeviceMgr.AllDevices() {
-		if _, ok := h.gb28181DeviceMgr.FindChannel(dev.ID, channelID); ok {
+	for _, dev := range s.deps.DeviceMgr.AllDevices() {
+		if _, ok := s.deps.DeviceMgr.FindChannel(dev.ID, channelID); ok {
 			return dev.ID, true
 		}
 	}
@@ -69,9 +63,9 @@ func (h *Handler) locateGBChannel(channelID string) (string, bool) {
 // most channels map exactly; channels without an enrolled camera still get
 // the derived ID — snapshots persist under a namespaced directory and the
 // event simply references an unknown camera to UI consumers.
-func (h *Handler) gbCameraIDForChannel(channelID string) string {
+func (s *server) gbCameraIDForChannel(channelID string) string {
 	camID := "gb-" + channelID
-	if h.camMgr != nil && h.camMgr.GetCameraConfig(camID) == nil {
+	if s.deps.Cam != nil && s.deps.Cam.GetCameraConfig(camID) == nil {
 		gbSnapshotLogger.Debug("snapshot for channel without enrolled camera", "channel_id", channelID)
 	}
 	return camID
@@ -84,7 +78,7 @@ type gbSnapshotRequest struct {
 
 // handleGB28181ChannelSnapshot sends DeviceControl(SnapShotCmd) — the device
 // captures SnapNum frames and POSTs them to the session's upload URL.
-func (h *Handler) handleGB28181ChannelSnapshot(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGB28181ChannelSnapshot(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
@@ -98,21 +92,21 @@ func (h *Handler) handleGB28181ChannelSnapshot(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	deviceID, ok := h.locateGBChannel(channelID)
+	deviceID, ok := s.locateGBChannel(channelID)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if dev, found := h.gb28181DeviceMgr.Device(deviceID); !found || dev.Status.Load() == platform.DeviceOffline {
+	if dev, found := s.deps.DeviceMgr.Device(deviceID); !found || dev.Status.Load() == platform.DeviceOffline {
 		WriteError(w, http.StatusConflict, "device is offline, cannot snapshot channel")
 		return
 	}
-	if h.gb28181Commander == nil || h.gb28181SnapMgr == nil {
+	if s.deps.Commander == nil || s.deps.SnapMgr == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 device control not available")
 		return
 	}
 
-	sess, err := h.gb28181SnapMgr.CreateSession(channelID, deviceID, h.gbCameraIDForChannel(channelID), body.SnapNum)
+	sess, err := s.deps.SnapMgr.CreateSession(channelID, deviceID, s.gbCameraIDForChannel(channelID), body.SnapNum)
 	if err != nil {
 		gbSnapshotLogger.Error("create snapshot session failed", "channel_id", channelID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to create snapshot session")
@@ -127,7 +121,7 @@ func (h *Handler) handleGB28181ChannelSnapshot(w http.ResponseWriter, r *http.Re
 	if body.Interval > 0 {
 		cmd.Interval = body.Interval
 	}
-	if err := h.gb28181Commander.SendSnapShotCmd(channelID, cmd); err != nil {
+	if err := s.deps.Commander.SendSnapShotCmd(channelID, cmd); err != nil {
 		// The session dies by its own timeout sweep; the command itself
 		// failed synchronously (transport or encoding) — report it now.
 		gbSnapshotLogger.Error("send SnapShotCmd failed", "channel_id", channelID, "error", err)
@@ -153,7 +147,7 @@ type gbRecordRequest struct {
 // start = device-side manual recording begins; the platform-side stream
 // capture is the existing INVITE path (invite endpoint / auto-invite on
 // recording-enabled cameras).
-func (h *Handler) handleGB28181ChannelRecord(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGB28181ChannelRecord(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
@@ -165,16 +159,16 @@ func (h *Handler) handleGB28181ChannelRecord(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	deviceID, ok := h.locateGBChannel(channelID)
+	deviceID, ok := s.locateGBChannel(channelID)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if dev, found := h.gb28181DeviceMgr.Device(deviceID); !found || dev.Status.Load() == platform.DeviceOffline {
+	if dev, found := s.deps.DeviceMgr.Device(deviceID); !found || dev.Status.Load() == platform.DeviceOffline {
 		WriteError(w, http.StatusConflict, "device is offline, cannot control recording")
 		return
 	}
-	if h.gb28181Commander == nil {
+	if s.deps.Commander == nil {
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 device control not available")
 		return
 	}
@@ -183,10 +177,10 @@ func (h *Handler) handleGB28181ChannelRecord(w http.ResponseWriter, r *http.Requ
 	var status string
 	switch body.Action {
 	case "start":
-		err = h.gb28181Commander.StartManualRecord(channelID)
+		err = s.deps.Commander.StartManualRecord(channelID)
 		status = "record_cmd_sent"
 	case "stop":
-		err = h.gb28181Commander.StopManualRecord(channelID)
+		err = s.deps.Commander.StopManualRecord(channelID)
 		status = "stop_cmd_sent"
 	default:
 		WriteError(w, http.StatusBadRequest, "action must be start or stop")
@@ -207,8 +201,8 @@ func (h *Handler) handleGB28181ChannelRecord(w http.ResponseWriter, r *http.Requ
 // handleGB28181SnapshotUpload receives one JPEG frame from a device (public
 // endpoint — the session ID in the URL is the credential). Mounted on the
 // rate-limited public group.
-func (h *Handler) handleGB28181SnapshotUpload(w http.ResponseWriter, r *http.Request) {
-	if h.gb28181SnapMgr == nil {
+func (s *server) handleGB28181SnapshotUpload(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SnapMgr == nil {
 		WriteError(w, http.StatusServiceUnavailable, "snapshot receiving not available")
 		return
 	}
@@ -222,7 +216,7 @@ func (h *Handler) handleGB28181SnapshotUpload(w http.ResponseWriter, r *http.Req
 		WriteError(w, http.StatusRequestEntityTooLarge, "frame exceeds size limit")
 		return
 	}
-	path, err := h.gb28181SnapMgr.Receive(sessionID, jpeg)
+	path, err := s.deps.SnapMgr.Receive(sessionID, jpeg)
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "stored", "path": path})
