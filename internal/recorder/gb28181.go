@@ -557,8 +557,11 @@ func (r *GB28181Recorder) WriteAudio(codec string, data, config []byte, ptsTicks
 		return // no open video segment — audio before first IDR is dropped
 	}
 	// Sparse (adaptive-timelapse) mode drops DISK audio; the live fan-out
-	// above already ran (#496 semantics — ambient_audio is not wired for the
-	// GB28181 recorder yet).
+	// above already ran. audioSparse is cleared while adaptive.ambient_audio
+	// is on (#496), so the continuous G.711 track still lands in the MP4
+	// segment and the merge renders its atmosphere bed — same semantics as
+	// the RTSP/Xiaomi recorders. The optional ambient_archive sidecar is
+	// not wired here (product decision) — only the in-segment track is.
 	if r.audioSparse.Load() {
 		return
 	}
