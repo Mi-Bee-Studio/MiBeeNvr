@@ -4,7 +4,7 @@
 // audio-upstream WS), zero-touch onboarding, the webhook trigger, and the
 // per-camera SSE event stream.
 //
-// Extraction pattern per docs/architecture/api-package-split.md: a local Deps
+// Extraction pattern shared by the api domain packages: a local Deps
 // holding what the handlers touch, plus Register. The ptz/onvif/gb-talk
 // children of the /api/cameras/{id} tree belong to the gb domain and are
 // registered flat from there (chi forbids mounting the same pattern twice);

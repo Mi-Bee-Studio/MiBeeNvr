@@ -3,7 +3,7 @@
 // (snapshot / latest-frame), the protocol-capability and flow observability
 // endpoints, and the StreamRegistry that maps codecs to available protocols.
 //
-// Extraction pattern per docs/architecture/api-package-split.md: a local Deps
+// Extraction pattern shared by the api domain packages: a local Deps
 // holding what the handlers touch, plus Register. The API root (internal/api)
 // keeps aggregation + dependency injection; this package owns the handlers.
 package streamsapi

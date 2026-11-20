@@ -32,7 +32,7 @@ jobs:
           done
           if [ -n "$bad" ]; then
             echo "::error::Forbidden top-level directories present:$bad"
-            echo "See docs/architecture/CONVENTIONS.md §1. Use devtools/ for tooling;"
+            echo "See docs/architecture/CONVENTIONS.md §1. Repo tooling lives in tests/;"
             echo "build output belongs in build/ or internal/ui/static/ (both gitignored)."
             exit 1
           fi
@@ -41,19 +41,14 @@ jobs:
       - name: internal must not import pkg
         run: |
           set -eu
-          # Only the interface packages themselves may be imported from
-          # internal side once §4.3 lands; today this asserts the direction is
-          # not widened any further.
+          # pkg/ is gone (CONVENTIONS §5); any import of it is a regression.
           hits=$(grep -rn 'MiBeeNvr/pkg/' internal/ --include='*.go' | grep -v '_test.go' || true)
-          count=$(printf '%s' "$hits" | grep -c 'MiBeeNvr/pkg/' || true)
-          baseline=4
-          echo "internal→pkg import sites: $count (baseline $baseline)"
-          if [ "$count" -gt "$baseline" ]; then
-            echo "::error::New internal→pkg dependency added (CONVENTIONS §2/§5)."
+          if [ -n "$hits" ]; then
+            echo "::error::internal→pkg dependency reintroduced (CONVENTIONS §2/§5)."
             printf '%s\n' "$hits"
             exit 1
           fi
-          echo "OK: internal→pkg dependency count not increased"
+          echo "OK: no internal→pkg imports"
 
       - name: Changed Go files under 1200 lines
         run: |
@@ -85,8 +80,9 @@ jobs:
             echo "::error::docs/private/ must stay out of the repo (CONVENTIONS §7)"
             fail=1
           fi
-          if git grep -nE '192\.168\.(63|62|1)\.[0-9]+' -- '*.go' '*.md' '*.ts' '*.svelte' \
-               ':!docs/architecture/*' 2>/dev/null | grep -vE 'EXAMPLE|192\.0\.2\.' | head -5; then
+          addr=$(git grep -nE '192\.168\.(63|62)\.[0-9]+' -- '*.go' '*.md' '*.ts' '*.svelte' || true)
+          if [ -n "$addr" ]; then
             echo "::warning::internal addresses found in tracked sources — verify they are examples"
+            printf '%s\n' "$addr" | head -5
           fi
           exit $fail

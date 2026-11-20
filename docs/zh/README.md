@@ -102,5 +102,4 @@
 | [架构总览](architecture.md) | 包结构与数据流 |
 | [并发架构](concurrency-architecture.md) | 线程模型、同步原语及背后的决策 |
 | [WASM 播放器设计](wasm-player-design.md) | 浏览器端 H.265 播放器设计 |
-| [存储层研究](storage-research.md) | v0.9.0 存储重构期的历史研究文档 |
 | [已知问题（深度剖析）](known-issues/ai-logit-false-positives.md) | 根因分析：[AI logit 误报](known-issues/ai-logit-false-positives.md) · [ONNX gzip trailer](known-issues/ai-onnx-gzip-trailer.md) · [H.265 多相机](known-issues/h265-multicam.md) |

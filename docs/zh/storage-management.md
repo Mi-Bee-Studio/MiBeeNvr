@@ -99,4 +99,3 @@ curl -u admin:password http://192.168.1.50:9090/api/storage/migrate/status
 ## 下一步
 
 - [自适应录制](adaptive-recording.md) — 从写入密度上先把磁盘占用降下来
-- [存储优化研究](storage-research.md) — 存储子系统的设计深潜

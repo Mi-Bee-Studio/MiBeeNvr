@@ -2,7 +2,7 @@ package api
 
 // Transitional system-domain shims: the api root's tests call these Handler
 // methods / package helpers directly; they delegate into systemapi. Delete as
-// the tests migrate (documented in api-package-split.md step 3).
+// the tests migrate.
 
 import (
 	"net/http"

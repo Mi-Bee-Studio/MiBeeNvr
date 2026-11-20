@@ -37,7 +37,7 @@ func TestUpdateCameraEvictsCachedONVIFClientOnCredentialChange(t *testing.T) {
 	// Simulate the established cached client (pre-update credentials). The
 	// map is guarded by onvifMu — background goroutines from the update path
 	// (recorder restart, subscription reconcile) access it concurrently.
-	stale := onvif.NewClient("http://192.168.62.104:8080/onvif/device_service", "admin", "old-secret")
+	stale := onvif.NewClient("http://192.168.40.104:8080/onvif/device_service", "admin", "old-secret")
 	mgr.onvifMu.Lock()
 	mgr.onvifClients[camID] = stale
 	mgr.onvifMu.Unlock()
@@ -65,7 +65,7 @@ func TestUpdateCameraKeepsCachedONVIFClientOnUnrelatedChange(t *testing.T) {
 	mgr, camID := newManagerWithONVIFCamera(t)
 
 	mgr.onvifMu.Lock()
-	mgr.onvifClients[camID] = onvif.NewClient("http://192.168.62.104:8080/onvif/device_service", "admin", "secret")
+	mgr.onvifClients[camID] = onvif.NewClient("http://192.168.40.104:8080/onvif/device_service", "admin", "secret")
 	cached := mgr.onvifClients[camID]
 	mgr.onvifMu.Unlock()
 

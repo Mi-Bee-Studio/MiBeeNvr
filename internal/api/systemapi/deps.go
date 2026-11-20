@@ -4,7 +4,7 @@
 // management, backups, protocol capability listing, feature toggles, and the
 // transcoding subsystem endpoints (check/status/tasks/backfill).
 //
-// Extraction pattern per docs/architecture/api-package-split.md: a local Deps
+// Extraction pattern shared by the api domain packages: a local Deps
 // holding what the handlers touch, plus Register (authed group, flat — chi
 // forbids mounting the same pattern twice).
 package systemapi

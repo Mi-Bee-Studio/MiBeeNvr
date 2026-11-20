@@ -358,13 +358,13 @@ func TestDiscoverByStableID_GetDeviceInfoPathStillWorks(t *testing.T) {
 func TestBuildCandidates_NearestHostsFirst(t *testing.T) {
 	cam := config.CameraConfig{
 		ID:            "c",
-		ONVIFEndpoint: "http://192.168.63.238:8080/onvif/device_service",
-		SubnetHints:   []string{"192.168.63.0/24"},
+		ONVIFEndpoint: "http://192.168.40.238:8080/onvif/device_service",
+		SubnetHints:   []string{"192.168.40.0/24"},
 	}
 	got := buildCandidates(cam)
 
 	// The last-known host itself leads.
-	mustEqual(t, got[0], "192.168.63.238", "last-known host first")
+	mustEqual(t, got[0], "192.168.40.238", "last-known host first")
 
 	pos := make(map[string]int, len(got))
 	for i, h := range got {
@@ -373,14 +373,14 @@ func TestBuildCandidates_NearestHostsFirst(t *testing.T) {
 		}
 	}
 	// Distance order inside the .63 block: near neighbours before .1.
-	for _, near := range []string{"192.168.63.237", "192.168.63.239", "192.168.63.236"} {
-		if pos[near] > pos["192.168.63.1"] {
-			t.Fatalf("neighbour %s must come before .1 (positions %d vs %d)", near, pos[near], pos["192.168.63.1"])
+	for _, near := range []string{"192.168.40.237", "192.168.40.239", "192.168.40.236"} {
+		if pos[near] > pos["192.168.40.1"] {
+			t.Fatalf("neighbour %s must come before .1 (positions %d vs %d)", near, pos[near], pos["192.168.40.1"])
 		}
 	}
 	// And the far end of the range must sort after the near neighbours.
-	if pos["192.168.63.150"] < pos["192.168.63.237"] {
-		t.Fatalf(".150 must sort after .237: %d < %d", pos["192.168.63.150"], pos["192.168.63.237"])
+	if pos["192.168.40.150"] < pos["192.168.40.237"] {
+		t.Fatalf(".150 must sort after .237: %d < %d", pos["192.168.40.150"], pos["192.168.40.237"])
 	}
 }
 

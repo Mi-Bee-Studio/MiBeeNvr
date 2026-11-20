@@ -1,7 +1,7 @@
 // Package notifyapi serves the outbound notification status and test-send
 // endpoints.
 //
-// Extraction pattern per docs/architecture/api-package-split.md: a local Deps
+// Extraction pattern shared by the api domain packages: a local Deps
 // holding a narrow interface, plus Register. A nil Service means notifications
 // are disabled — the endpoints still answer so the settings panel can explain
 // itself instead of 404-ing.

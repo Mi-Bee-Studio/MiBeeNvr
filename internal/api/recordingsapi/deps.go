@@ -3,7 +3,7 @@
 // merge + timelapse (periodic merge) management endpoints, archives, audio
 // WAV serving with its access audit, and the media download paths.
 //
-// Extraction pattern per docs/architecture/api-package-split.md: a local Deps
+// Extraction pattern shared by the api domain packages: a local Deps
 // holding what the handlers touch, plus Register (authed group) and
 // RegisterPublic (the anonymous timelapse-merge download pair).
 package recordingsapi

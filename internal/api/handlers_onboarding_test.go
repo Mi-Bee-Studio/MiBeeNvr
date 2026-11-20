@@ -96,14 +96,14 @@ func TestOnboarding_JobSnapshot(t *testing.T) {
 	h.SetOnboardingService(&fakeOnboarding{
 		job: onboarding.Job{
 			ID: "job-9", Kind: "adopt", State: onboarding.JobDone, StartedAt: time.Now(),
-			Adopt: &onboarding.AdoptResult{NewIP: "192.168.63.77", CameraID: "cam-1"},
+			Adopt: &onboarding.AdoptResult{NewIP: "192.168.40.77", CameraID: "cam-1"},
 		},
 	})
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/onboarding/jobs/job-9", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), `"state":"done"`)
-	require.Contains(t, rr.Body.String(), `"new_ip":"192.168.63.77"`)
+	require.Contains(t, rr.Body.String(), `"new_ip":"192.168.40.77"`)
 
 	rr = doRequest(t, h.Routes(), "GET", "/api/onboarding/jobs/missing", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)

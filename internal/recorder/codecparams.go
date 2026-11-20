@@ -11,9 +11,9 @@ import (
 // switch for JPEG-family recorders which have no codec parameter sets.
 //
 // Extracted from internal/api when the streaming domain moved into its own
-// package (docs/architecture/api-package-split.md) — the camera domain needs
-// the same introspection for encoding probes, and a leaf-level home keeps the
-// two domain packages from importing each other.
+// package — the camera domain needs the same introspection for encoding
+// probes, and a leaf-level home keeps the two domain packages from importing
+// each other.
 func CodecParamsOf(rec model.Recorder) (codec model.Format, sps, pps, vps []byte) {
 	actualRec := model.UnwrapDelegate(rec)
 	if provider, ok := actualRec.(model.HLSProvider); ok {

@@ -52,7 +52,7 @@ func TestValidateOnboarding_StaticTargetRequired(t *testing.T) {
 	}
 	require.ErrorContains(t, ValidateOnboarding(cfg), "target_static_ip")
 
-	cfg.CameraOnboarding.TargetStaticIP = "192.168.63.77"
+	cfg.CameraOnboarding.TargetStaticIP = "192.168.40.77"
 	require.NoError(t, ValidateOnboarding(cfg))
 }
 

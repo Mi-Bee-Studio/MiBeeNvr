@@ -8,7 +8,7 @@ import (
 
 // CameraOnboardingConfig configures zero-touch camera onboarding (#1120):
 // discovering cameras that sit on a factory-default IP subnet the NVR is not
-// part of (e.g. 192.168.1.0/24 while the NVR lives on 192.168.63.0/24), and
+// part of (e.g. 192.168.1.0/24 while the NVR lives on 192.168.40.0/24), and
 // moving them onto the NVR's own subnet for enrollment — without touching a
 // laptop and re-addressing by hand.
 //
