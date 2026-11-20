@@ -1,0 +1,31 @@
+package api
+
+import (
+	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
+)
+
+// systemDeps adapts the Handler's fields to the system domain Deps.
+func systemDeps(h *Handler) systemapi.Deps {
+	return systemapi.Deps{
+		DB:           h.db,
+		Store:        h.store,
+		Config:       h.config,
+		ConfigPath:   h.configPath,
+		Cam:          h.camMgr,
+		APIKeyStore:  h.apiKeyStore,
+		MigrationMgr: h.migrationMgr,
+		TranscodeMgr: h.transcodeMgr,
+		Downloader:   h.downloader,
+		UpSince:      func() time.Time { return appStartTime },
+	}
+}
+
+// Domain interface aliases: root fields, setters, and tests keep the
+// pre-extraction names.
+type (
+	TranscodeManagerAPI = systemapi.TranscodeManagerAPI
+	TranscodeDownloader = systemapi.TranscodeDownloader
+	StorageMigrator     = systemapi.StorageMigrator
+)

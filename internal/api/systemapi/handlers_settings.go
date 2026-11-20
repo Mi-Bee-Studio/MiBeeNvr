@@ -1,4 +1,4 @@
-package api
+package systemapi
 
 import (
 	"encoding/json"
@@ -14,14 +14,14 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
 	// Compute timezone display string
-	tzDisplay := h.config.Timezone
+	tzDisplay := s.deps.Config.Timezone
 	if tzDisplay != "" && tzDisplay != "UTC" && tzDisplay != "Local" {
 		if loc, err := time.LoadLocation(tzDisplay); err == nil {
 			_, offset := time.Now().In(loc).Zone()
@@ -40,109 +40,109 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cleanup": map[string]any{
-			"retention_days":         h.config.Cleanup.RetentionDays,
-			"check_interval":         h.config.Cleanup.CheckInterval,
-			"disk_threshold_percent": h.config.Cleanup.DiskThresholdPercent,
+			"retention_days":         s.deps.Config.Cleanup.RetentionDays,
+			"check_interval":         s.deps.Config.Cleanup.CheckInterval,
+			"disk_threshold_percent": s.deps.Config.Cleanup.DiskThresholdPercent,
 			// Motion-aware disk cleanup (#435): when the disk threshold is
 			// hit, evict boring (low motion_score) segments first. nil = on.
-			"motion_aware_disk_cleanup": h.config.Cleanup.MotionAwareDiskCleanup == nil || *h.config.Cleanup.MotionAwareDiskCleanup,
+			"motion_aware_disk_cleanup": s.deps.Config.Cleanup.MotionAwareDiskCleanup == nil || *s.deps.Config.Cleanup.MotionAwareDiskCleanup,
 		},
 		// Global recording gate default: cameras without an explicit
 		// recording_enabled inherit this (new + auto-enrolled channels).
 		"recording": map[string]any{
-			"default_enabled": h.config.RecordingGate(nil),
+			"default_enabled": s.deps.Config.RecordingGate(nil),
 		},
 		"webdav": map[string]any{
-			"enabled":     h.config.WebDAV.Enabled != nil && *h.config.WebDAV.Enabled,
-			"path_prefix": h.config.WebDAV.PathPrefix,
-			"read_write":  h.config.WebDAV.ReadWrite,
+			"enabled":     s.deps.Config.WebDAV.Enabled != nil && *s.deps.Config.WebDAV.Enabled,
+			"path_prefix": s.deps.Config.WebDAV.PathPrefix,
+			"read_write":  s.deps.Config.WebDAV.ReadWrite,
 		},
 		"storage": map[string]any{
-			"root_dir": h.config.Storage.RootDir,
+			"root_dir": s.deps.Config.Storage.RootDir,
 			// Remote object-storage offload (issue #874 batch 2). The secret
 			// is never returned — only whether one is configured (mirrors
 			// gb28181.password_configured). access_key_id round-trips because
 			// it may carry a ${VAR} reference the UI must not destroy.
 			"remote": map[string]any{
-				"enabled":           h.config.Storage.Remote.Enabled,
-				"endpoint_url":      h.config.Storage.Remote.EndpointURL,
-				"region":            h.config.Storage.Remote.Region,
-				"bucket":            h.config.Storage.Remote.Bucket,
-				"prefix":            h.config.Storage.Remote.Prefix,
-				"path_style":        h.config.Storage.Remote.PathStyle == nil || *h.config.Storage.Remote.PathStyle,
-				"access_key_id":     h.config.Storage.Remote.AccessKeyID,
-				"secret_configured": h.config.Storage.Remote.SecretAccessKey != "",
+				"enabled":           s.deps.Config.Storage.Remote.Enabled,
+				"endpoint_url":      s.deps.Config.Storage.Remote.EndpointURL,
+				"region":            s.deps.Config.Storage.Remote.Region,
+				"bucket":            s.deps.Config.Storage.Remote.Bucket,
+				"prefix":            s.deps.Config.Storage.Remote.Prefix,
+				"path_style":        s.deps.Config.Storage.Remote.PathStyle == nil || *s.deps.Config.Storage.Remote.PathStyle,
+				"access_key_id":     s.deps.Config.Storage.Remote.AccessKeyID,
+				"secret_configured": s.deps.Config.Storage.Remote.SecretAccessKey != "",
 				"upload": map[string]any{
-					"max_concurrency": h.config.Storage.Remote.Upload.MaxConcurrency,
-					"scan_interval_s": h.config.Storage.Remote.Upload.ScanIntervalS,
-					"min_age_s":       h.config.Storage.Remote.Upload.MinAgeS,
-					"backlog_limit":   h.config.Storage.Remote.Upload.BacklogLimit,
+					"max_concurrency": s.deps.Config.Storage.Remote.Upload.MaxConcurrency,
+					"scan_interval_s": s.deps.Config.Storage.Remote.Upload.ScanIntervalS,
+					"min_age_s":       s.deps.Config.Storage.Remote.Upload.MinAgeS,
+					"backlog_limit":   s.deps.Config.Storage.Remote.Upload.BacklogLimit,
 				},
 				"evict": map[string]any{
-					"after_days": h.config.Storage.Remote.Evict.AfterDays,
+					"after_days": s.deps.Config.Storage.Remote.Evict.AfterDays,
 				},
 				"playback": map[string]any{
-					"presigned":    h.config.Storage.Remote.Playback.Presigned,
-					"endpoint_url": h.config.Storage.Remote.Playback.EndpointURL,
-					"ttl_s":        h.config.Storage.Remote.Playback.TTLS,
+					"presigned":    s.deps.Config.Storage.Remote.Playback.Presigned,
+					"endpoint_url": s.deps.Config.Storage.Remote.Playback.EndpointURL,
+					"ttl_s":        s.deps.Config.Storage.Remote.Playback.TTLS,
 				},
-				"camera_overrides": h.config.Storage.Remote.CameraOverrides,
+				"camera_overrides": s.deps.Config.Storage.Remote.CameraOverrides,
 			},
 		},
 		"auth": map[string]any{
-			"username":        h.config.Auth.Username,
-			"auth_configured": h.config.Auth.PasswordHash != "" || h.config.Auth.Password != "",
+			"username":        s.deps.Config.Auth.Username,
+			"auth_configured": s.deps.Config.Auth.PasswordHash != "" || s.deps.Config.Auth.Password != "",
 		},
 		"mibeevision": map[string]any{
-			"api_keys": buildAPIKeyInfo(h.config.APIKeys, h.apiKeyLastUsed()),
+			"api_keys": buildAPIKeyInfo(s.deps.Config.APIKeys, s.apiKeyLastUsed()),
 		},
 		"vision": map[string]any{
-			"enabled":                h.config.Vision.Enabled,
-			"url":                    h.config.Vision.URL,
-			"push_mode":              h.config.Vision.PushMode,
-			"heartbeat_timeout_secs": h.config.Vision.HeartbeatTimeoutSecs,
-			"instances":              h.config.Vision.Instances,
+			"enabled":                s.deps.Config.Vision.Enabled,
+			"url":                    s.deps.Config.Vision.URL,
+			"push_mode":              s.deps.Config.Vision.PushMode,
+			"heartbeat_timeout_secs": s.deps.Config.Vision.HeartbeatTimeoutSecs,
+			"instances":              s.deps.Config.Vision.Instances,
 		},
 		"update": map[string]any{
 			// Bare-metal auto-apply toggle (#648 UI switch, #647 execution).
-			"auto_apply": h.config.Update.IsAutoApply(),
+			"auto_apply": s.deps.Config.Update.IsAutoApply(),
 		},
-		"timezone":         h.config.Timezone,
+		"timezone":         s.deps.Config.Timezone,
 		"timezone_display": tzDisplay,
 		"server": map[string]any{
-			"listen": h.config.Server.Listen,
+			"listen": s.deps.Config.Server.Listen,
 		},
 		"gb28181": map[string]any{
-			"enabled":    h.config.GB28181.Enabled,
-			"sip_listen": h.config.GB28181.SIPListen,
-			"server_id":  h.config.GB28181.ServerID,
-			"realm":      h.config.GB28181.Realm,
+			"enabled":    s.deps.Config.GB28181.Enabled,
+			"sip_listen": s.deps.Config.GB28181.SIPListen,
+			"server_id":  s.deps.Config.GB28181.ServerID,
+			"realm":      s.deps.Config.GB28181.Realm,
 			// Never return the SIP password (mirrors the masked auth/API-key
 			// fields above); the frontend only needs whether one is set.
-			"password_configured": h.config.GB28181.Password != "",
-			"port_range":          h.config.GB28181.PortRange,
-			"allowed_device_ids":  h.config.GB28181.AllowedDeviceIDs,
-			"heartbeat_interval":  h.config.GB28181.HeartbeatInterval,
-			"catalog_interval":    h.config.GB28181.CatalogInterval,
-			"tcp_mode":            h.config.GB28181.TCPMode,
-			"tcp_framing":         h.config.GB28181.TCPFraming,
-			"media_transport":     h.config.GB28181.MediaTransport,
-			"sip_transport":       h.config.GB28181.SIPTransport,
+			"password_configured": s.deps.Config.GB28181.Password != "",
+			"port_range":          s.deps.Config.GB28181.PortRange,
+			"allowed_device_ids":  s.deps.Config.GB28181.AllowedDeviceIDs,
+			"heartbeat_interval":  s.deps.Config.GB28181.HeartbeatInterval,
+			"catalog_interval":    s.deps.Config.GB28181.CatalogInterval,
+			"tcp_mode":            s.deps.Config.GB28181.TCPMode,
+			"tcp_framing":         s.deps.Config.GB28181.TCPFraming,
+			"media_transport":     s.deps.Config.GB28181.MediaTransport,
+			"sip_transport":       s.deps.Config.GB28181.SIPTransport,
 			// Subscription toggles (#341): resolve the *bool defaults so the
 			// UI sees the effective values.
-			"subscribe_catalog":         h.config.GB28181.CatalogSubscriptionOn(),
-			"subscribe_alarm":           h.config.GB28181.AlarmSubscriptionOn(),
-			"subscribe_mobile_position": h.config.GB28181.SubscribeMobilePosition,
-			"subscribe_expires":         h.config.GB28181.SubscribeExpires,
+			"subscribe_catalog":         s.deps.Config.GB28181.CatalogSubscriptionOn(),
+			"subscribe_alarm":           s.deps.Config.GB28181.AlarmSubscriptionOn(),
+			"subscribe_mobile_position": s.deps.Config.GB28181.SubscribeMobilePosition,
+			"subscribe_expires":         s.deps.Config.GB28181.SubscribeExpires,
 		},
-		"doorbell": h.doorbellSettingsView(),
+		"doorbell": s.doorbellSettingsView(),
 		"dlna": map[string]any{
-			"enabled":       h.config.DLNA.Enabled,
-			"port":          h.config.DLNA.Port,
-			"interfaces":    h.config.DLNA.Interfaces,
-			"friendly_name": h.config.DLNA.FriendlyName,
+			"enabled":       s.deps.Config.DLNA.Enabled,
+			"port":          s.deps.Config.DLNA.Port,
+			"interfaces":    s.deps.Config.DLNA.Interfaces,
+			"friendly_name": s.deps.Config.DLNA.FriendlyName,
 		},
-		"notifications": h.notificationsSettingsView(),
+		"notifications": s.notificationsSettingsView(),
 	})
 }
 
@@ -150,9 +150,9 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 // /api/settings. Tokens and the snapshot API key are never returned — only
 // whether they are configured (gb28181.password_configured convention); the
 // UI round-trips blank secrets to keep existing values on save.
-func (h *Handler) notificationsSettingsView() map[string]any {
-	sinks := make([]map[string]any, 0, len(h.config.Notifications.Sinks))
-	for _, s := range h.config.Notifications.Sinks {
+func (s *server) notificationsSettingsView() map[string]any {
+	sinks := make([]map[string]any, 0, len(s.deps.Config.Notifications.Sinks))
+	for _, s := range s.deps.Config.Notifications.Sinks {
 		sinks = append(sinks, map[string]any{
 			"name":             s.Name,
 			"url":              s.URL,
@@ -164,9 +164,9 @@ func (h *Handler) notificationsSettingsView() map[string]any {
 		})
 	}
 	return map[string]any{
-		"enabled":            h.config.Notifications.Enabled,
-		"base_url":           h.config.Notifications.BaseURL,
-		"api_key_configured": h.config.Notifications.APIKey != "",
+		"enabled":            s.deps.Config.Notifications.Enabled,
+		"base_url":           s.deps.Config.Notifications.BaseURL,
+		"api_key_configured": s.deps.Config.Notifications.APIKey != "",
 		"sinks":              sinks,
 	}
 }
@@ -175,9 +175,9 @@ func (h *Handler) notificationsSettingsView() map[string]any {
 // (#971). Secrets are never returned — per-user and outbound secrets
 // surface as secret_configured booleans (gb28181.password_configured
 // convention); outbound is null when mode B is off.
-func (h *Handler) doorbellSettingsView() map[string]any {
-	users := make([]map[string]any, 0, len(h.config.Doorbell.Users))
-	for _, u := range h.config.Doorbell.Users {
+func (s *server) doorbellSettingsView() map[string]any {
+	users := make([]map[string]any, 0, len(s.deps.Config.Doorbell.Users))
+	for _, u := range s.deps.Config.Doorbell.Users {
 		users = append(users, map[string]any{
 			"username":          u.Username,
 			"name":              u.Name,
@@ -186,7 +186,7 @@ func (h *Handler) doorbellSettingsView() map[string]any {
 		})
 	}
 	var outbound any
-	if ob := h.config.Doorbell.Outbound; ob != nil {
+	if ob := s.deps.Config.Doorbell.Outbound; ob != nil {
 		outbound = map[string]any{
 			"server":            ob.Server,
 			"username":          ob.Username,
@@ -195,14 +195,14 @@ func (h *Handler) doorbellSettingsView() map[string]any {
 		}
 	}
 	return map[string]any{
-		"enabled":      h.config.Doorbell.Enabled,
-		"listen":       h.config.Doorbell.Listen,
-		"realm":        h.config.Doorbell.Realm,
-		"transport":    h.config.Doorbell.Transport,
-		"tls_cert":     h.config.Doorbell.TLSCert,
-		"tls_key":      h.config.Doorbell.TLSKey,
-		"lan_only":     h.config.Doorbell.LANOnlyEnabled(),
-		"ring_timeout": h.config.Doorbell.RingTimeout,
+		"enabled":      s.deps.Config.Doorbell.Enabled,
+		"listen":       s.deps.Config.Doorbell.Listen,
+		"realm":        s.deps.Config.Doorbell.Realm,
+		"transport":    s.deps.Config.Doorbell.Transport,
+		"tls_cert":     s.deps.Config.Doorbell.TLSCert,
+		"tls_key":      s.deps.Config.Doorbell.TLSKey,
+		"lan_only":     s.deps.Config.Doorbell.LANOnlyEnabled(),
+		"ring_timeout": s.deps.Config.Doorbell.RingTimeout,
 		"users":        users,
 		"outbound":     outbound,
 	}
@@ -226,8 +226,8 @@ func formatOffset(seconds int) string {
 // itself). Revoked keys are included (grayed in the UI) so owners can see the
 // full per-device token list; last_used comes from the live store when wired.
 
-func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -345,7 +345,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	// Update auto-apply toggle (#648): takes effect on the next check cycle.
 	if body.Update != nil && body.Update.AutoApply != nil {
-		h.config.Update.AutoApply = body.Update.AutoApply
+		s.deps.Config.Update.AutoApply = body.Update.AutoApply
 	}
 
 	// Global recording gate default: hot-apply by recycling running cameras
@@ -353,11 +353,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// the settings save must not block on it (config is already persisted by
 	// the time the goroutine reads it).
 	if body.Recording != nil && body.Recording.DefaultEnabled != nil {
-		oldDefault := h.config.RecordingGate(nil)
-		h.config.Recording.DefaultEnabled = body.Recording.DefaultEnabled
-		if oldDefault != *body.Recording.DefaultEnabled && h.camMgr != nil {
+		oldDefault := s.deps.Config.RecordingGate(nil)
+		s.deps.Config.Recording.DefaultEnabled = body.Recording.DefaultEnabled
+		if oldDefault != *body.Recording.DefaultEnabled && s.deps.Cam != nil {
 			enabled := *body.Recording.DefaultEnabled
-			go h.camMgr.ApplyRecordingDefault(enabled)
+			go s.deps.Cam.ApplyRecordingDefault(enabled)
 		}
 	}
 
@@ -369,7 +369,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// crash loop; field-by-field early returns also half-committed a save
 	// when a later field failed.
 	if body.Cleanup != nil {
-		merged := h.config.Cleanup
+		merged := s.deps.Config.Cleanup
 		if body.Cleanup.RetentionDays != nil {
 			merged.RetentionDays = *body.Cleanup.RetentionDays
 		}
@@ -396,7 +396,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		h.config.Cleanup = merged
+		s.deps.Config.Cleanup = merged
 	}
 
 	// Update storage root (#395) — next-start semantics, see body.Storage.
@@ -412,7 +412,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if dir == "" {
 			dir = "/"
 		}
-		if dir != h.config.Storage.RootDir {
+		if dir != s.deps.Config.Storage.RootDir {
 			// Preflight the target with a real SQLite round-trip (create dir,
 			// create+drop a table under the same WAL/mmap pragmas the NVR DB
 			// uses). MkdirAll alone accepted paths that later crash-looped the
@@ -423,12 +423,12 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					fmt.Sprintf("storage root not usable: %v (the recording root must host the NVR database)", err))
 				return
 			}
-			h.config.Storage.RootDir = dir
+			s.deps.Config.Storage.RootDir = dir
 			// Hot switch: NEW segments immediately go to the new root (the DB
 			// is decoupled and stays on the data volume; in-flight segments
 			// finish where they started). No restart needed.
-			if h.store != nil {
-				if err := h.store.SetRootDir(dir); err != nil {
+			if s.deps.Store != nil {
+				if err := s.deps.Store.SetRootDir(dir); err != nil {
 					WriteError(w, http.StatusBadRequest, fmt.Sprintf("cannot switch recording root: %v", err))
 					return
 				}
@@ -444,7 +444,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// passes (#867 discipline). Next-start semantics: the uploader service
 	// and playback proxy are constructed at boot.
 	if body.Storage != nil && body.Storage.Remote != nil {
-		merged := h.config.Storage.Remote
+		merged := s.deps.Config.Storage.Remote
 		ru := body.Storage.Remote
 		if ru.Enabled != nil {
 			merged.Enabled = *ru.Enabled
@@ -505,26 +505,26 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := config.ValidateRemoteCameraOverrides(h.config.Cameras, merged.CameraOverrides); err != nil {
+		if err := config.ValidateRemoteCameraOverrides(s.deps.Config.Cameras, merged.CameraOverrides); err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		h.config.Storage.Remote = merged
+		s.deps.Config.Storage.Remote = merged
 		remoteOffloadChanged = true
 	}
 
 	if body.WebDAV != nil {
 		if body.WebDAV.Enabled != nil {
-			if h.config.WebDAV.Enabled == nil {
-				h.config.WebDAV.Enabled = new(bool)
+			if s.deps.Config.WebDAV.Enabled == nil {
+				s.deps.Config.WebDAV.Enabled = new(bool)
 			}
-			*h.config.WebDAV.Enabled = *body.WebDAV.Enabled
+			*s.deps.Config.WebDAV.Enabled = *body.WebDAV.Enabled
 		}
 		if body.WebDAV.PathPrefix != nil {
-			h.config.WebDAV.PathPrefix = *body.WebDAV.PathPrefix
+			s.deps.Config.WebDAV.PathPrefix = *body.WebDAV.PathPrefix
 		}
 		if body.WebDAV.ReadWrite != nil {
-			h.config.WebDAV.ReadWrite = *body.WebDAV.ReadWrite
+			s.deps.Config.WebDAV.ReadWrite = *body.WebDAV.ReadWrite
 		}
 	}
 
@@ -555,7 +555,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			known := seen
 			known["default"] = true
 			var stranded []string
-			for _, cam := range h.config.Cameras {
+			for _, cam := range s.deps.Config.Cameras {
 				for _, name := range cam.VisionTargets {
 					if !known[name] {
 						stranded = append(stranded, cam.ID+"→"+name)
@@ -568,17 +568,17 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					"cameras still route to removed vision instances: "+strings.Join(stranded, ", "))
 				return
 			}
-			h.config.Vision.Instances = *body.Vision.Instances
+			s.deps.Config.Vision.Instances = *body.Vision.Instances
 		}
 		if body.Vision.URL != nil {
-			h.config.Vision.URL = strings.TrimSpace(*body.Vision.URL)
+			s.deps.Config.Vision.URL = strings.TrimSpace(*body.Vision.URL)
 		}
 		if body.Vision.Enabled != nil {
-			h.config.Vision.Enabled = *body.Vision.Enabled
+			s.deps.Config.Vision.Enabled = *body.Vision.Enabled
 		}
 		logger.Info("vision settings updated",
-			"instances", len(h.config.Vision.EffectiveInstances()),
-			"enabled", h.config.Vision.Enabled)
+			"instances", len(s.deps.Config.Vision.EffectiveInstances()),
+			"enabled", s.deps.Config.Vision.Enabled)
 	}
 
 	if body.Timezone != nil {
@@ -589,7 +589,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		h.config.Timezone = tz
+		s.deps.Config.Timezone = tz
 	}
 
 	if body.Server != nil && body.Server.Listen != nil {
@@ -600,63 +600,63 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadRequest, "listen must be a valid port (1-65535)")
 			return
 		}
-		h.config.Server.Listen = fmt.Sprintf(":%d", port)
+		s.deps.Config.Server.Listen = fmt.Sprintf(":%d", port)
 	}
 
 	if body.GB28181 != nil {
 		if body.GB28181.Enabled != nil {
-			h.config.GB28181.Enabled = *body.GB28181.Enabled
+			s.deps.Config.GB28181.Enabled = *body.GB28181.Enabled
 		}
 		if body.GB28181.SIPListen != nil {
-			h.config.GB28181.SIPListen = *body.GB28181.SIPListen
+			s.deps.Config.GB28181.SIPListen = *body.GB28181.SIPListen
 		}
 		if body.GB28181.ServerID != nil {
-			h.config.GB28181.ServerID = *body.GB28181.ServerID
+			s.deps.Config.GB28181.ServerID = *body.GB28181.ServerID
 		}
 		if body.GB28181.Realm != nil {
-			h.config.GB28181.Realm = *body.GB28181.Realm
+			s.deps.Config.GB28181.Realm = *body.GB28181.Realm
 		}
 		if body.GB28181.Password != nil {
 			// Blank password = keep current (the GET no longer returns the
 			// password, so the UI round-trips an empty field when unchanged).
 			if trimmed := strings.TrimSpace(*body.GB28181.Password); trimmed != "" {
-				h.config.GB28181.Password = trimmed
+				s.deps.Config.GB28181.Password = trimmed
 			}
 		}
 		if body.GB28181.PortRange != nil {
-			h.config.GB28181.PortRange = *body.GB28181.PortRange
+			s.deps.Config.GB28181.PortRange = *body.GB28181.PortRange
 		}
 		if body.GB28181.AllowedDeviceIDs != nil {
-			h.config.GB28181.AllowedDeviceIDs = *body.GB28181.AllowedDeviceIDs
+			s.deps.Config.GB28181.AllowedDeviceIDs = *body.GB28181.AllowedDeviceIDs
 		}
 		if body.GB28181.HeartbeatInterval != nil {
-			h.config.GB28181.HeartbeatInterval = *body.GB28181.HeartbeatInterval
+			s.deps.Config.GB28181.HeartbeatInterval = *body.GB28181.HeartbeatInterval
 		}
 		if body.GB28181.CatalogInterval != nil {
-			h.config.GB28181.CatalogInterval = *body.GB28181.CatalogInterval
+			s.deps.Config.GB28181.CatalogInterval = *body.GB28181.CatalogInterval
 		}
 		if body.GB28181.TCPMode != nil {
-			h.config.GB28181.TCPMode = *body.GB28181.TCPMode
+			s.deps.Config.GB28181.TCPMode = *body.GB28181.TCPMode
 		}
 		if body.GB28181.TCPFraming != nil {
-			h.config.GB28181.TCPFraming = *body.GB28181.TCPFraming
+			s.deps.Config.GB28181.TCPFraming = *body.GB28181.TCPFraming
 		}
 		if body.GB28181.MediaTransport != nil {
-			h.config.GB28181.MediaTransport = *body.GB28181.MediaTransport
+			s.deps.Config.GB28181.MediaTransport = *body.GB28181.MediaTransport
 			// Keep the legacy alias coherent for older config readers.
-			h.config.GB28181.TCPMode = *body.GB28181.MediaTransport != "udp"
+			s.deps.Config.GB28181.TCPMode = *body.GB28181.MediaTransport != "udp"
 		}
 		if body.GB28181.SIPTransport != nil {
-			h.config.GB28181.SIPTransport = *body.GB28181.SIPTransport
+			s.deps.Config.GB28181.SIPTransport = *body.GB28181.SIPTransport
 		}
 		if body.GB28181.SubscribeCatalog != nil {
-			h.config.GB28181.SubscribeCatalog = body.GB28181.SubscribeCatalog
+			s.deps.Config.GB28181.SubscribeCatalog = body.GB28181.SubscribeCatalog
 		}
 		if body.GB28181.SubscribeAlarm != nil {
-			h.config.GB28181.SubscribeAlarm = body.GB28181.SubscribeAlarm
+			s.deps.Config.GB28181.SubscribeAlarm = body.GB28181.SubscribeAlarm
 		}
 		if body.GB28181.SubscribeMobilePosition != nil {
-			h.config.GB28181.SubscribeMobilePosition = *body.GB28181.SubscribeMobilePosition
+			s.deps.Config.GB28181.SubscribeMobilePosition = *body.GB28181.SubscribeMobilePosition
 		}
 		if body.GB28181.SubscribeExpires != nil {
 			if trimmed := strings.TrimSpace(*body.GB28181.SubscribeExpires); trimmed != "" {
@@ -664,11 +664,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					WriteError(w, http.StatusBadRequest, "subscribe_expires must be a valid duration (e.g., \"3600s\", \"2h\")")
 					return
 				}
-				h.config.GB28181.SubscribeExpires = trimmed
+				s.deps.Config.GB28181.SubscribeExpires = trimmed
 			}
 		}
 		// Validate the updated config (catches invalid server_id, sip_listen, etc.)
-		if err := config.Validate(h.config); err != nil {
+		if err := config.Validate(s.deps.Config); err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -682,7 +682,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// discipline).
 	doorbellChanged := false
 	if body.Doorbell != nil {
-		merged := h.config.Doorbell
+		merged := s.deps.Config.Doorbell
 		db := body.Doorbell
 		if db.Enabled != nil {
 			merged.Enabled = *db.Enabled
@@ -712,8 +712,8 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			// Whole-table replace. A blank secret keeps the existing secret
 			// for the same username (the GET never returns secrets, so the
 			// UI round-trips blanks — same semantics as the gb28181 password).
-			oldSecrets := make(map[string]string, len(h.config.Doorbell.Users))
-			for _, u := range h.config.Doorbell.Users {
+			oldSecrets := make(map[string]string, len(s.deps.Config.Doorbell.Users))
+			for _, u := range s.deps.Config.Doorbell.Users {
 				oldSecrets[u.Username] = u.Secret
 			}
 			users := make([]config.DoorbellUserConfig, 0, len(*db.Users))
@@ -756,10 +756,10 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				merged.Outbound = &target
 			}
 		}
-		prev := h.config.Doorbell
-		h.config.Doorbell = merged
-		if err := config.Validate(h.config); err != nil {
-			h.config.Doorbell = prev
+		prev := s.deps.Config.Doorbell
+		s.deps.Config.Doorbell = merged
+		if err := config.Validate(s.deps.Config); err != nil {
+			s.deps.Config.Doorbell = prev
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -769,7 +769,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// DLNA media server (#970) — same next-start semantics as doorbell.
 	dlnaChanged := false
 	if body.DLNA != nil {
-		merged := h.config.DLNA
+		merged := s.deps.Config.DLNA
 		if body.DLNA.Enabled != nil {
 			merged.Enabled = *body.DLNA.Enabled
 		}
@@ -782,10 +782,10 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if body.DLNA.FriendlyName != nil {
 			merged.FriendlyName = strings.TrimSpace(*body.DLNA.FriendlyName)
 		}
-		prev := h.config.DLNA
-		h.config.DLNA = merged
-		if err := config.Validate(h.config); err != nil {
-			h.config.DLNA = prev
+		prev := s.deps.Config.DLNA
+		s.deps.Config.DLNA = merged
+		if err := config.Validate(s.deps.Config); err != nil {
+			s.deps.Config.DLNA = prev
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -796,7 +796,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// as doorbell/DLNA: the dispatcher and its sinks are constructed at boot.
 	notificationsChanged := false
 	if body.Notifications != nil {
-		merged := h.config.Notifications
+		merged := s.deps.Config.Notifications
 		if body.Notifications.Enabled != nil {
 			merged.Enabled = *body.Notifications.Enabled
 		}
@@ -811,8 +811,8 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if body.Notifications.Sinks != nil {
 			// Keep existing secrets for same-named sinks; blank token on a
 			// NEW sink is a config error caught by Validate below.
-			prevTokens := make(map[string]string, len(h.config.Notifications.Sinks))
-			for _, s := range h.config.Notifications.Sinks {
+			prevTokens := make(map[string]string, len(s.deps.Config.Notifications.Sinks))
+			for _, s := range s.deps.Config.Notifications.Sinks {
 				prevTokens[s.Name] = s.Token
 			}
 			sinks := make([]config.NotificationSinkConfig, 0, len(*body.Notifications.Sinks))
@@ -833,10 +833,10 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			merged.Sinks = sinks
 		}
-		prev := h.config.Notifications
-		h.config.Notifications = merged
-		if err := config.Validate(h.config); err != nil {
-			h.config.Notifications = prev
+		prev := s.deps.Config.Notifications
+		s.deps.Config.Notifications = merged
+		if err := config.Validate(s.deps.Config); err != nil {
+			s.deps.Config.Notifications = prev
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -844,7 +844,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist config to disk
-	if err := config.Save(h.configPath, h.config); err != nil {
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 	}
 
@@ -909,8 +909,3 @@ type remoteSettingsUpdate struct {
 	} `json:"playback"`
 	CameraOverrides *map[string]config.RemoteCameraOverride `json:"camera_overrides"`
 }
-
-// handleStorageCandidates reports the recording-root choices available to the
-// settings UI (#395): the current storage.root_dir plus any extra locations the
-// host platform granted (fnOS user-authorized dirs, mounted under /media/* by
-// the lifecycle script and passed via NVR_STORAGE_CANDIDATES).

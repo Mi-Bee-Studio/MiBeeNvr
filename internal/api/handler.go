@@ -21,6 +21,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/recordingsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/relayapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -146,70 +147,6 @@ type CameraHealthDetail struct {
 	Score  int    `json:"score"`
 }
 
-// SystemStats is the response from /api/stats/system.
-type SystemStats struct {
-	CPU       CPUStats     `json:"cpu"`
-	Memory    MemoryStats  `json:"memory"`
-	Network   NetworkStats `json:"network"`
-	Uptime    string       `json:"uptime"`
-	Timestamp int64        `json:"timestamp"`
-	// Load / Disk 补齐饱和观测(2026-09-11 M5 IO 饱和事故:73% iowait + 负载
-	// 15 在既有 CPU 瓦片上完全不可见——CPU 忙闲是低的)。nil = 不可用平台。
-	Load *LoadStats `json:"load,omitempty"`
-	Disk *DiskStats `json:"disk,omitempty"`
-	// DB 写事务来源观测(#759):每来源累计数 + 每秒速率(服务端按两次采样
-	// 窗口计算)。nil = 尚无第二个采样窗口。
-	DB *DBTxnStats `json:"db,omitempty"`
-}
-
-// DBTxnStats 是按来源聚合的 DB 写事务面板数据(#759)。
-type DBTxnStats struct {
-	// Sources 按累计数降序(写热点排序一眼可见)。
-	Sources []DBTxnSource `json:"sources"`
-}
-
-type DBTxnSource struct {
-	Name      string  `json:"name"`
-	Total     int64   `json:"total"`
-	PerSecond float64 `json:"per_second"`
-	AvgMs     float64 `json:"avg_ms"`
-}
-
-type CPUStats struct {
-	Total  uint64 `json:"total"`  // cumulative total jiffies
-	Idle   uint64 `json:"idle"`   // cumulative idle jiffies
-	Iowait uint64 `json:"iowait"` // cumulative iowait jiffies (delta between polls = iowait%)
-}
-
-// LoadStats 是 /proc/loadavg 快照(1/5/15 分钟)。
-type LoadStats struct {
-	One     float64 `json:"one"`
-	Five    float64 `json:"five"`
-	Fifteen float64 `json:"fifteen"`
-}
-
-// DiskStats 是录像根的容量水位。WatermarkPct 取 cleanup.disk_threshold_percent
-// (清理已在执行的阈值),used_pct 越线即 status=high——录满盘前的可见预警。
-type DiskStats struct {
-	Path         string  `json:"path"`
-	TotalBytes   uint64  `json:"total_bytes"`
-	FreeBytes    uint64  `json:"free_bytes"`
-	UsedPct      float64 `json:"used_pct"`
-	WatermarkPct float64 `json:"watermark_pct"`
-	Status       string  `json:"status"` // ok | high | unknown
-}
-
-type MemoryStats struct {
-	Total      uint64 `json:"total"`       // MemTotal bytes
-	Available  uint64 `json:"available"`   // MemAvailable bytes
-	ProcessRSS uint64 `json:"process_rss"` // NVR process RSS bytes
-}
-
-type NetworkStats struct {
-	BytesSent uint64 `json:"bytes_sent"`
-	BytesRecv uint64 `json:"bytes_recv"`
-}
-
 // capabilitiesResponse is the response for GET /api/capabilities.
 type capabilitiesResponse struct {
 	Ingest ingestCapabilities `json:"ingest"`
@@ -239,21 +176,18 @@ type Handler struct {
 	// "playback" tenant (#886, gray-release). nil (default) = ServeFile
 	// semantics unchanged.
 	playbackBudget atomic.Pointer[iobudget.Limiter]
-	// DB txn panel rate window (#759): previous /api/system/stats sample.
-	dbTxnMu     sync.Mutex
-	dbTxnPrev   *dbTxnSample
-	db          *storage.DB
-	store       *storage.Manager
-	authMW      func(http.Handler) http.Handler
-	config      *config.Config
-	camMgr      *camera.CameraManager
-	hlsMgr      *hls.Manager
-	webrtcMgr   *webrtc.Manager
-	flvMgr      *flv.Manager
-	wsMgr       *wsstream.Manager
-	viewerStore *viewer.Store
-	viewerLogin ViewerLoginFn
-	configPath  string
+	db             *storage.DB
+	store          *storage.Manager
+	authMW         func(http.Handler) http.Handler
+	config         *config.Config
+	camMgr         *camera.CameraManager
+	hlsMgr         *hls.Manager
+	webrtcMgr      *webrtc.Manager
+	flvMgr         *flv.Manager
+	wsMgr          *wsstream.Manager
+	viewerStore    *viewer.Store
+	viewerLogin    ViewerLoginFn
+	configPath     string
 	// snapStore owns the shared JPEG-still TTL cache (snapshot / latest-frame /
 	// HLS stale-serve) — state lives in the streamsapi domain package, the
 	// capturer is wired here and forwarded into its Deps.
@@ -398,10 +332,32 @@ func (h *Handler) Routes() http.Handler {
 		recordingsapi.Register(r, recordingsDeps(h))
 		camerasapi.Register(r, camerasDeps(h))
 		streamsapi.Register(r, streamsDeps(h))
-		h.registerSystemRoutes(r)
+		systemapi.Register(r, systemDeps(h))
+		// License / P2P / update / rtsp-output settings stay at the root until
+		// their domains extract (handlers_license/_p2p/_update/_settings_rtsp).
+		r.Get("/api/version", h.handleVersion)
+		r.Get("/api/license", h.handleGetLicense)
+		r.Put("/api/license", h.handleInstallLicense)
+		r.Get("/api/settings/rtsp-output", h.handleGetRtspOutputSettings)
+		r.Put("/api/settings/rtsp-output", h.handleUpdateRtspOutputSettings)
+		r.Get("/api/p2p/status", h.handleGetP2PStatus)
+		r.Post("/api/p2p/viewer-report", h.handleP2pViewerReport)
+		r.Get("/api/p2p/viewer", h.handleGetP2pViewer)
+		r.Get("/api/settings/p2p", h.handleGetP2PSettings)
+		r.Put("/api/settings/p2p", h.handleUpdateP2PSettings)
+		r.Get("/api/p2p/association", h.handleGetP2PAssociation)
+		r.Post("/api/p2p/association/request", h.handleRequestP2PAssociation)
+		r.Post("/api/p2p/association/confirm", h.handleConfirmP2PAssociation)
+		r.Post("/api/p2p/association/enroll", h.handleEnrollP2PAssociation)
+		r.Post("/api/p2p/association/unbind", h.handleUnbindP2PAssociation)
+		r.Post("/api/p2p/association/cancel", h.handleCancelP2PAssociation)
+		r.Get("/api/update/check", h.handleUpdateCheck)
+		r.Post("/api/update/check", h.handleUpdateCheck)
+		r.Post("/api/update/apply", h.handleUpdateApply)
+		r.Get("/api/update/apply/status", h.handleUpdateApplyStatus)
+		r.Get("/api/update/history", h.handleUpdateHistory)
 		h.registerHealthRoutes(r)
 		relayapi.Register(r, relayapi.Deps{Relay: relayDeps(h.relayMgr)})
-		h.registerTranscodeRoutes(r)
 		h.registerAIRoutes(r)
 		h.registerVisionRoutes(r)
 		h.registerTelemetryRoute(r)

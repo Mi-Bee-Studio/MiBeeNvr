@@ -1,4 +1,4 @@
-package api
+package systemapi
 
 // handlers_storage_path_test.go — OS-portable path semantics of the storage
 // migrate/candidate handlers (#891): absolute-path checks must accept Windows

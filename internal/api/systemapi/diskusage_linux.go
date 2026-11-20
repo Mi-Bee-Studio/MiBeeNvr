@@ -1,6 +1,6 @@
 //go:build linux
 
-package api
+package systemapi
 
 import "syscall"
 

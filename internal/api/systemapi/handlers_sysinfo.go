@@ -1,4 +1,4 @@
-package api
+package systemapi
 
 import (
 	"fmt"
@@ -13,27 +13,27 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	backupDir := filepath.Join(filepath.Dir(h.configPath), "backups")
+	backupDir := filepath.Join(filepath.Dir(s.deps.ConfigPath), "backups")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to create backup directory")
 		return
 	}
 	filename := fmt.Sprintf("nvr-backup-%s.db", time.Now().Format("20060102-150405"))
 	destPath := filepath.Join(backupDir, filename)
-	if err := h.db.Backup(r.Context(), destPath); err != nil {
+	if err := s.deps.DB.Backup(r.Context(), destPath); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to create backup")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "created", "file": filename})
 }
 
-func (h *Handler) handleListBackups(w http.ResponseWriter, r *http.Request) {
-	backupDir := filepath.Join(filepath.Dir(h.configPath), "backups")
+func (s *server) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	backupDir := filepath.Join(filepath.Dir(s.deps.ConfigPath), "backups")
 	entries, err := os.ReadDir(backupDir)
 	if err != nil {
 		writeJSON(w, http.StatusOK, []string{})
@@ -209,7 +209,7 @@ func readProcessRSS() uint64 {
 	return rssPages * uint64(os.Getpagesize())
 }
 
-func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 	cpuTotal, cpuIdle, cpuIowait, _ := readCPURaw()
 	memTotal, memAvailable, _ := readMemoryInfo()
 	netSent, netRecv, _ := readNetworkInfo()
@@ -219,7 +219,7 @@ func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		CPU:       CPUStats{Total: cpuTotal, Idle: cpuIdle, Iowait: cpuIowait},
 		Memory:    MemoryStats{Total: memTotal, Available: memAvailable, ProcessRSS: processRSS},
 		Network:   NetworkStats{BytesSent: netSent, BytesRecv: netRecv},
-		Uptime:    formatUptime(time.Since(appStartTime)),
+		Uptime:    formatUptime(time.Since(s.upSince())),
 		Timestamp: time.Now().Unix(),
 	}
 
@@ -229,11 +229,11 @@ func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 
 	root := "/"
 	watermark := 90.0
-	if h.config != nil {
-		if h.config.Storage.RootDir != "" {
-			root = h.config.Storage.RootDir
+	if s.deps.Config != nil {
+		if s.deps.Config.Storage.RootDir != "" {
+			root = s.deps.Config.Storage.RootDir
 		}
-		if p := h.config.Cleanup.DiskThresholdPercent; p > 0 {
+		if p := s.deps.Config.Cleanup.DiskThresholdPercent; p > 0 {
 			watermark = float64(p)
 		}
 	}
@@ -251,7 +251,7 @@ func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		resp.Disk = &DiskStats{Path: root, WatermarkPct: watermark, Status: "unknown"}
 	}
 
-	resp.DB = h.dbTxnStats()
+	resp.DB = s.dbTxnStats()
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -265,27 +265,27 @@ type dbTxnSample struct {
 // dbTxnStats derives the per-source DB write panel from storage's cumulative
 // counters (#759): totals since start + rates over the poll window (two
 // samples minimum). Handler-field state, single-writer per HTTP poll.
-func (h *Handler) dbTxnStats() *DBTxnStats {
+func (s *server) dbTxnStats() *DBTxnStats {
 	counts, nanos := storage.TxnSnapshot()
 	now := time.Now()
 
-	h.dbTxnMu.Lock()
+	s.dbTxnMu.Lock()
 	var prev dbTxnSample
 	rates := map[string]float64{}
-	if h.dbTxnPrev != nil {
-		prev = *h.dbTxnPrev
+	if s.dbTxnPrev != nil {
+		prev = *s.dbTxnPrev
 		if dt := now.Sub(prev.at).Seconds(); dt > 0.5 {
 			for src, c := range counts {
 				if before, ok := prev.counts[src]; ok {
 					rates[src] = float64(c-before) / dt
 				}
 			}
-			h.dbTxnPrev = &dbTxnSample{at: now, counts: counts}
+			s.dbTxnPrev = &dbTxnSample{at: now, counts: counts}
 		}
 	} else {
-		h.dbTxnPrev = &dbTxnSample{at: now, counts: counts}
+		s.dbTxnPrev = &dbTxnSample{at: now, counts: counts}
 	}
-	h.dbTxnMu.Unlock()
+	s.dbTxnMu.Unlock()
 
 	_ = prev
 	out := &DBTxnStats{Sources: make([]DBTxnSource, 0, len(counts))}
@@ -308,6 +308,66 @@ func (h *Handler) dbTxnStats() *DBTxnStats {
 	return out
 }
 
-// handleGetAutoDiscoverSettings returns the current auto_discover config. The
-// default_password is NEVER returned over the API (avoid plaintext leakage);
-// instead a boolean has_default_password indicates whether one is configured.
+// SystemStats is the response from /api/stats/system.
+type SystemStats struct {
+	CPU       CPUStats     `json:"cpu"`
+	Memory    MemoryStats  `json:"memory"`
+	Network   NetworkStats `json:"network"`
+	Uptime    string       `json:"uptime"`
+	Timestamp int64        `json:"timestamp"`
+	// Load / Disk 补齐饱和观测(2026-09-11 M5 IO 饱和事故:73% iowait + 负载
+	// 15 在既有 CPU 瓦片上完全不可见——CPU 忙闲是低的)。nil = 不可用平台。
+	Load *LoadStats `json:"load,omitempty"`
+	Disk *DiskStats `json:"disk,omitempty"`
+	// DB 写事务来源观测(#759):每来源累计数 + 每秒速率(服务端按两次采样
+	// 窗口计算)。nil = 尚无第二个采样窗口。
+	DB *DBTxnStats `json:"db,omitempty"`
+}
+
+// DBTxnStats 是按来源聚合的 DB 写事务面板数据(#759)。
+type DBTxnStats struct {
+	// Sources 按累计数降序(写热点排序一眼可见)。
+	Sources []DBTxnSource `json:"sources"`
+}
+
+type DBTxnSource struct {
+	Name      string  `json:"name"`
+	Total     int64   `json:"total"`
+	PerSecond float64 `json:"per_second"`
+	AvgMs     float64 `json:"avg_ms"`
+}
+
+type CPUStats struct {
+	Total  uint64 `json:"total"`  // cumulative total jiffies
+	Idle   uint64 `json:"idle"`   // cumulative idle jiffies
+	Iowait uint64 `json:"iowait"` // cumulative iowait jiffies (delta between polls = iowait%)
+}
+
+// LoadStats 是 /proc/loadavg 快照(1/5/15 分钟)。
+type LoadStats struct {
+	One     float64 `json:"one"`
+	Five    float64 `json:"five"`
+	Fifteen float64 `json:"fifteen"`
+}
+
+// DiskStats 是录像根的容量水位。WatermarkPct 取 cleanup.disk_threshold_percent
+// (清理已在执行的阈值),used_pct 越线即 status=high——录满盘前的可见预警。
+type DiskStats struct {
+	Path         string  `json:"path"`
+	TotalBytes   uint64  `json:"total_bytes"`
+	FreeBytes    uint64  `json:"free_bytes"`
+	UsedPct      float64 `json:"used_pct"`
+	WatermarkPct float64 `json:"watermark_pct"`
+	Status       string  `json:"status"` // ok | high | unknown
+}
+
+type MemoryStats struct {
+	Total      uint64 `json:"total"`       // MemTotal bytes
+	Available  uint64 `json:"available"`   // MemAvailable bytes
+	ProcessRSS uint64 `json:"process_rss"` // NVR process RSS bytes
+}
+
+type NetworkStats struct {
+	BytesSent uint64 `json:"bytes_sent"`
+	BytesRecv uint64 `json:"bytes_recv"`
+}

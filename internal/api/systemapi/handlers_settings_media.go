@@ -1,4 +1,4 @@
-package api
+package systemapi
 
 import (
 	"encoding/json"
@@ -7,50 +7,50 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 )
 
-func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleGetStreamingSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"webrtc": map[string]any{
-			"enabled":      h.config.Streaming.WebRTC.Enabled != nil && *h.config.Streaming.WebRTC.Enabled,
-			"max_viewers":  h.config.Streaming.WebRTC.MaxViewers,
-			"idle_timeout": h.config.Streaming.WebRTC.IdleTimeout,
+			"enabled":      s.deps.Config.Streaming.WebRTC.Enabled != nil && *s.deps.Config.Streaming.WebRTC.Enabled,
+			"max_viewers":  s.deps.Config.Streaming.WebRTC.MaxViewers,
+			"idle_timeout": s.deps.Config.Streaming.WebRTC.IdleTimeout,
 		},
 		"flv": map[string]any{
-			"enabled":        h.config.Streaming.FLV.Enabled != nil && *h.config.Streaming.FLV.Enabled,
-			"max_viewers":    h.config.Streaming.FLV.MaxViewers,
-			"idle_timeout":   h.config.Streaming.FLV.IdleTimeout,
-			"gop_cache_size": h.config.Streaming.FLV.GOPCacheSize,
+			"enabled":        s.deps.Config.Streaming.FLV.Enabled != nil && *s.deps.Config.Streaming.FLV.Enabled,
+			"max_viewers":    s.deps.Config.Streaming.FLV.MaxViewers,
+			"idle_timeout":   s.deps.Config.Streaming.FLV.IdleTimeout,
+			"gop_cache_size": s.deps.Config.Streaming.FLV.GOPCacheSize,
 		},
 		"hls": map[string]any{
-			"low_latency": h.config.HLS.LowLatencyEnabled(),
+			"low_latency": s.deps.Config.HLS.LowLatencyEnabled(),
 			// Concurrent HLS preview-stream budget — the global LRU eviction
 			// threshold shared by all clients (#1072). Takes effect at
 			// restart (the Manager reads it at construction).
-			"max_streams": h.config.HLS.MaxStreams,
+			"max_streams": s.deps.Config.HLS.MaxStreams,
 		},
 		// RTMP/SRT ingest settings. The streaming panel persisted nothing for
 		// them before: the PUT body had no rtmp/srt fields, so the UI switches
 		// silently no-op'd while still toasting success (found configuring the
 		// fnOS test box, 2026-08-19).
 		"rtmp": map[string]any{
-			"enabled":     h.config.RTMP.Enabled != nil && *h.config.RTMP.Enabled,
-			"port":        h.config.RTMP.Port,
-			"stream_keys": h.config.RTMP.StreamKeys, // camera_id → stream_key (legacy map; per-camera stream_key takes precedence)
+			"enabled":     s.deps.Config.RTMP.Enabled != nil && *s.deps.Config.RTMP.Enabled,
+			"port":        s.deps.Config.RTMP.Port,
+			"stream_keys": s.deps.Config.RTMP.StreamKeys, // camera_id → stream_key (legacy map; per-camera stream_key takes precedence)
 		},
 		"srt": map[string]any{
-			"enabled": h.config.SRT.Enabled != nil && *h.config.SRT.Enabled,
-			"port":    h.config.SRT.Port,
-			"streams": h.config.SRT.Streams,
+			"enabled": s.deps.Config.SRT.Enabled != nil && *s.deps.Config.SRT.Enabled,
+			"port":    s.deps.Config.SRT.Port,
+			"streams": s.deps.Config.SRT.Streams,
 		},
 	})
 }
 
-func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -90,105 +90,105 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 	if body.WebRTC != nil {
 		if body.WebRTC.Enabled != nil {
-			if h.config.Streaming.WebRTC.Enabled == nil {
-				h.config.Streaming.WebRTC.Enabled = new(bool)
+			if s.deps.Config.Streaming.WebRTC.Enabled == nil {
+				s.deps.Config.Streaming.WebRTC.Enabled = new(bool)
 			}
-			*h.config.Streaming.WebRTC.Enabled = *body.WebRTC.Enabled
+			*s.deps.Config.Streaming.WebRTC.Enabled = *body.WebRTC.Enabled
 		}
 		if body.WebRTC.MaxViewers != nil {
-			h.config.Streaming.WebRTC.MaxViewers = *body.WebRTC.MaxViewers
+			s.deps.Config.Streaming.WebRTC.MaxViewers = *body.WebRTC.MaxViewers
 		}
 		if body.WebRTC.IdleTimeout != nil {
-			h.config.Streaming.WebRTC.IdleTimeout = *body.WebRTC.IdleTimeout
+			s.deps.Config.Streaming.WebRTC.IdleTimeout = *body.WebRTC.IdleTimeout
 		}
 	}
 
 	if body.FLV != nil {
 		if body.FLV.Enabled != nil {
-			if h.config.Streaming.FLV.Enabled == nil {
-				h.config.Streaming.FLV.Enabled = new(bool)
+			if s.deps.Config.Streaming.FLV.Enabled == nil {
+				s.deps.Config.Streaming.FLV.Enabled = new(bool)
 			}
-			*h.config.Streaming.FLV.Enabled = *body.FLV.Enabled
+			*s.deps.Config.Streaming.FLV.Enabled = *body.FLV.Enabled
 		}
 		if body.FLV.MaxViewers != nil {
-			h.config.Streaming.FLV.MaxViewers = *body.FLV.MaxViewers
+			s.deps.Config.Streaming.FLV.MaxViewers = *body.FLV.MaxViewers
 		}
 		if body.FLV.IdleTimeout != nil {
-			h.config.Streaming.FLV.IdleTimeout = *body.FLV.IdleTimeout
+			s.deps.Config.Streaming.FLV.IdleTimeout = *body.FLV.IdleTimeout
 		}
 		if body.FLV.GOPCacheSize != nil {
-			h.config.Streaming.FLV.GOPCacheSize = *body.FLV.GOPCacheSize
+			s.deps.Config.Streaming.FLV.GOPCacheSize = *body.FLV.GOPCacheSize
 		}
 	}
 
 	if body.HLS != nil {
 		if body.HLS.LowLatency != nil {
-			if h.config.HLS.LowLatency == nil {
-				h.config.HLS.LowLatency = new(bool)
+			if s.deps.Config.HLS.LowLatency == nil {
+				s.deps.Config.HLS.LowLatency = new(bool)
 			}
-			*h.config.HLS.LowLatency = *body.HLS.LowLatency
+			*s.deps.Config.HLS.LowLatency = *body.HLS.LowLatency
 		}
 		if body.HLS.MaxStreams != nil {
 			if *body.HLS.MaxStreams < 1 || *body.HLS.MaxStreams > 20 {
 				WriteError(w, http.StatusBadRequest, "hls.max_streams must be between 1 and 20")
 				return
 			}
-			h.config.HLS.MaxStreams = *body.HLS.MaxStreams
+			s.deps.Config.HLS.MaxStreams = *body.HLS.MaxStreams
 		}
 	}
 
 	if body.RTMP != nil {
 		if body.RTMP.Enabled != nil {
-			if h.config.RTMP.Enabled == nil {
-				h.config.RTMP.Enabled = new(bool)
+			if s.deps.Config.RTMP.Enabled == nil {
+				s.deps.Config.RTMP.Enabled = new(bool)
 			}
-			*h.config.RTMP.Enabled = *body.RTMP.Enabled
+			*s.deps.Config.RTMP.Enabled = *body.RTMP.Enabled
 		}
 		if body.RTMP.Port != nil {
-			h.config.RTMP.Port = *body.RTMP.Port
+			s.deps.Config.RTMP.Port = *body.RTMP.Port
 		}
 		if body.RTMP.StreamKeys != nil {
-			h.config.RTMP.StreamKeys = body.RTMP.StreamKeys
+			s.deps.Config.RTMP.StreamKeys = body.RTMP.StreamKeys
 		}
 	}
 
 	if body.SRT != nil {
 		if body.SRT.Enabled != nil {
-			if h.config.SRT.Enabled == nil {
-				h.config.SRT.Enabled = new(bool)
+			if s.deps.Config.SRT.Enabled == nil {
+				s.deps.Config.SRT.Enabled = new(bool)
 			}
-			*h.config.SRT.Enabled = *body.SRT.Enabled
+			*s.deps.Config.SRT.Enabled = *body.SRT.Enabled
 		}
 		if body.SRT.Port != nil {
-			h.config.SRT.Port = *body.SRT.Port
+			s.deps.Config.SRT.Port = *body.SRT.Port
 		}
 		if body.SRT.Streams != nil {
-			h.config.SRT.Streams = body.SRT.Streams
+			s.deps.Config.SRT.Streams = body.SRT.Streams
 		}
 	}
 
 	// Persist config to disk
-	if err := config.Save(h.configPath, h.config); err != nil {
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-func (h *Handler) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":     h.config.Transcoding.Enabled,
-		"max_workers": h.config.Transcoding.MaxWorkers,
+		"enabled":     s.deps.Config.Transcoding.Enabled,
+		"max_workers": s.deps.Config.Transcoding.MaxWorkers,
 	})
 }
 
-func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -208,15 +208,15 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 			WriteError(w, http.StatusBadRequest, "max_workers must be between 1 and 4")
 			return
 		}
-		h.config.Transcoding.MaxWorkers = *body.MaxWorkers
+		s.deps.Config.Transcoding.MaxWorkers = *body.MaxWorkers
 	}
 
 	if body.Enabled != nil {
-		h.config.Transcoding.Enabled = *body.Enabled
+		s.deps.Config.Transcoding.Enabled = *body.Enabled
 	}
 
 	// Persist config to disk
-	if err := config.Save(h.configPath, h.config); err != nil {
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 	}
 
@@ -226,12 +226,12 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 // handleGetAutoDiscoverSettings returns the current auto_discover config. The
 // default_password is NEVER returned over the API (avoid plaintext leakage);
 // instead a boolean has_default_password indicates whether one is configured.
-func (h *Handler) handleGetAutoDiscoverSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleGetAutoDiscoverSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
-	ad := h.config.AutoDiscover
+	ad := s.deps.Config.AutoDiscover
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":              ad.AutoDiscoverEnabled(),
 		"scan_interval":        ad.ScanIntervalSeconds,
@@ -250,8 +250,8 @@ func (h *Handler) handleGetAutoDiscoverSettings(w http.ResponseWriter, r *http.R
 // handleUpdateAutoDiscoverSettings updates the auto_discover config and persists
 // it to disk. All fields are optional (nil = unchanged); scan_interval is
 // floored to 30 to respect RPi-3B resource constraints.
-func (h *Handler) handleUpdateAutoDiscoverSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleUpdateAutoDiscoverSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -269,7 +269,7 @@ func (h *Handler) handleUpdateAutoDiscoverSettings(w http.ResponseWriter, r *htt
 		return
 	}
 
-	ad := &h.config.AutoDiscover
+	ad := &s.deps.Config.AutoDiscover
 	if body.Enabled != nil {
 		ad.Enabled = body.Enabled
 	}
@@ -300,12 +300,10 @@ func (h *Handler) handleUpdateAutoDiscoverSettings(w http.ResponseWriter, r *htt
 		ad.IgnoreScopes = body.IgnoreScopes
 	}
 
-	if err := config.Save(h.configPath, h.config); err != nil {
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
-
-// registerSystemRoutes registers system/stats/settings/backup/protocol/feature routes.

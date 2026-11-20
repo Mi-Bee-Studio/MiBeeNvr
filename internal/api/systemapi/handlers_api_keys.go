@@ -1,4 +1,4 @@
-package api
+package systemapi
 
 // API-key management endpoints and the info projection used by the settings
 // view. Split out of handlers_settings.go.
@@ -43,17 +43,17 @@ func buildAPIKeyInfo(keys []config.APIKeyConfig, lastUsed map[string]time.Time) 
 // syncAPIKeyStore rebuilds the live key set from the in-memory config. Called
 // after generate/revoke mutations so the API-key middleware picks up the
 // change on the next request without a restart (#335).
-func (h *Handler) syncAPIKeyStore() {
-	if h.apiKeyStore == nil || h.config == nil {
+func (s *server) syncAPIKeyStore() {
+	if s.deps.APIKeyStore == nil || s.deps.Config == nil {
 		return
 	}
 	valid := make(map[string]string)
-	for _, k := range h.config.APIKeys {
+	for _, k := range s.deps.Config.APIKeys {
 		if !k.Revoked && k.Key != "" {
 			valid[k.Key] = k.Name
 		}
 	}
-	h.apiKeyStore.SetKeys(valid)
+	s.deps.APIKeyStore.SetKeys(valid)
 }
 
 // apiKeyLastUsed returns the store's last-used map, or nil when no store is
@@ -61,19 +61,19 @@ func (h *Handler) syncAPIKeyStore() {
 
 // apiKeyLastUsed returns the store's last-used map, or nil when no store is
 // wired (tests, sub-handlers).
-func (h *Handler) apiKeyLastUsed() map[string]time.Time {
-	if h.apiKeyStore == nil {
+func (s *server) apiKeyLastUsed() map[string]time.Time {
+	if s.deps.APIKeyStore == nil {
 		return nil
 	}
-	return h.apiKeyStore.LastUsed()
+	return s.deps.APIKeyStore.LastUsed()
 }
 
 // handleStorageCandidates reports the recording-root choices available to the
 // settings UI (#395): the current storage.root_dir plus any extra locations the
 // host platform granted (fnOS user-authorized dirs, mounted under /media/* by
 // the lifecycle script and passed via NVR_STORAGE_CANDIDATES).
-func (h *Handler) handleStorageCandidates(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleStorageCandidates(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -87,13 +87,13 @@ func (h *Handler) handleStorageCandidates(w http.ResponseWriter, r *http.Request
 		RestartHint string      `json:"restart_hint"`
 		EnvManaged  bool        `json:"env_managed"`
 	}{
-		Current:     h.config.Storage.RootDir,
-		Candidates:  []candidate{{Path: h.config.Storage.RootDir, Label: "current"}},
+		Current:     s.deps.Config.Storage.RootDir,
+		Candidates:  []candidate{{Path: s.deps.Config.Storage.RootDir, Label: "current"}},
 		RestartHint: "切换立即生效：新录像将写入所选位置（无需重启）",
 		EnvManaged:  os.Getenv("NVR_STORAGE_CANDIDATES") != "",
 	}
-	seen := map[string]bool{h.config.Storage.RootDir: true}
-	for _, p := range h.config.Storage.Candidates {
+	seen := map[string]bool{s.deps.Config.Storage.RootDir: true}
+	for _, p := range s.deps.Config.Storage.Candidates {
 		if p == "" || seen[p] {
 			continue
 		}
@@ -120,8 +120,8 @@ func (h *Handler) handleStorageCandidates(w http.ResponseWriter, r *http.Request
 // handleGenerateAPIKey creates a new API key for MiBeeVision integration.
 // POST /api/settings/api-keys  body: {"name": "mibeevision-prod"}
 // Returns the full key ONCE (never exposed again).
-func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -140,7 +140,7 @@ func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 	// Reject duplicate ACTIVE names (#705): two live entries sharing a name make
 	// revoke-by-name ambiguous and the settings list confusing. Names that exist
 	// only in revoked history stay reusable (re-pairing flow).
-	for _, existing := range h.config.APIKeys {
+	for _, existing := range s.deps.Config.APIKeys {
 		if existing.Name == name && !existing.Revoked {
 			WriteError(w, http.StatusConflict, "an active API key with this name already exists")
 			return
@@ -148,16 +148,16 @@ func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := middleware.GenerateAPIKey()
-	h.config.APIKeys = append(h.config.APIKeys, config.APIKeyConfig{
+	s.deps.Config.APIKeys = append(s.deps.Config.APIKeys, config.APIKeyConfig{
 		Key:  key,
 		Name: name,
 	})
 
-	if err := config.Save(h.configPath, h.config); err != nil {
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
-	h.syncAPIKeyStore()
+	s.syncAPIKeyStore()
 
 	logger.Info("API key generated", "name", name)
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -172,8 +172,8 @@ func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 // handleRevokeAPIKey marks an API key as revoked by name.
 // DELETE /api/settings/api-keys/{name}
-func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -187,9 +187,9 @@ func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	// carry duplicates, and stopping at the first match left the newer key
 	// authorized while reporting success.
 	count := 0
-	for i := range h.config.APIKeys {
-		if h.config.APIKeys[i].Name == name {
-			h.config.APIKeys[i].Revoked = true
+	for i := range s.deps.Config.APIKeys {
+		if s.deps.Config.APIKeys[i].Name == name {
+			s.deps.Config.APIKeys[i].Revoked = true
 			count++
 		}
 	}
@@ -198,11 +198,11 @@ func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.Save(h.configPath, h.config); err != nil {
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
-	h.syncAPIKeyStore()
+	s.syncAPIKeyStore()
 
 	logger.Info("API key revoked", "name", name, "count", count)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "revoked", "count": count})
