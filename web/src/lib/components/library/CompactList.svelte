@@ -25,6 +25,7 @@
     onview: (recording: Recording) => void;
     ondelete: (recording: Recording) => void;
     ontranscode?: (recording: Recording) => void;
+    oncanceltranscode?: (task: TranscodeTask) => void;
     ondownload?: (recordingId: string) => void;
     onplay?: (recordingId: string) => void;
     sortBy?: string;
@@ -49,6 +50,7 @@
     onview,
     ondelete,
     ontranscode,
+    oncanceltranscode,
     ondownload,
     onplay,
     sortBy = 'started_at',
@@ -113,13 +115,6 @@
   function handleDeleteClick(e: Event, recording: Recording) {
     e.stopPropagation();
     ondelete(recording);
-  }
-
-  function handleCancelTranscode(e: Event, task: TranscodeTask) {
-    e.stopPropagation();
-    // Parent handles cancel via a different mechanism; we dispatch event through callback
-    // Using a custom approach since handleCancelTranscode is on the parent
-    ontoggleselect(task.recording_id); // placeholder — actual cancel handled by parent wiring
   }
 
   /** Sort indicator icon for a column header */
@@ -460,8 +455,8 @@
                 </div>
                 <button
                   onclick={() => {
-                    if (confirm(t('transcoding.cancel_confirm'))) {
-                      // Parent handles cancel via event
+                    if (transcodeTask && confirm(t('transcoding.cancel_confirm'))) {
+                      oncanceltranscode?.(transcodeTask);
                     }
                   }}
                   class="btn btn-ghost progress-cancel"

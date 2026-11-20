@@ -77,3 +77,7 @@ deploy/home-assistant/.venv/
 deploy/fnos-native/out/
 internal/ui/static/build-info.json
 internal/ui/static/sw.js
+
+# Transient ffmpeg probe probe artifacts (go test creates these via exec.Command args)
+internal/transcoding/-decoders
+internal/transcoding/-encoders

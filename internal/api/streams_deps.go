@@ -37,7 +37,6 @@ type (
 	StreamRegistry          = streamsapi.StreamRegistry
 	StreamHandler           = streamsapi.StreamHandler
 	StreamStartOptions      = streamsapi.StreamStartOptions
-	ConditionalHandler      = streamsapi.ConditionalHandler
 	ProtocolDetail          = streamsapi.ProtocolDetail
 	cameraProtocolsResponse = streamsapi.CameraProtocolsResponse
 	HLSStreamHandler        = streamsapi.HLSStreamHandler

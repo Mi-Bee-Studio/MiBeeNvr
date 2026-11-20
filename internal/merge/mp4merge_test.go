@@ -870,10 +870,10 @@ func TestLimitedWriter_SeekError(t *testing.T) {
 // NO byte-level hvcC test — only a round-trip ParseSegment check that would
 // silently accept a subtly-wrong hvcC. This test pins the conservative
 // Main-tier / zeroed-compat defaults that make ONVIF SPS inconsistencies
-// (cam-fa049182) playable in Edge, now that the construction is shared via
+// (cam-test-001) playable in Edge, now that the construction is shared via
 // mp4util.BuildHvcC.
 func TestMergeHvcC_ByteAlignment(t *testing.T) {
-	// Inconsistent SPS captured from cam-fa049182 (Main profile + High tier +
+	// Inconsistent SPS captured from cam-test-001 (Main profile + High tier +
 	// stray compat bit). See timelapse TestBuildHvcC_ConservativeTierAndCompat
 	// for the byte-by-byte decode.
 	inconsistentSPS := []byte{

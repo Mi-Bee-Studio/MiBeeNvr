@@ -22,8 +22,8 @@ The NVR only reports facts. Deduplication, aggregation, cooldowns, escalation an
   "severity": "error",
   "title": "Camera offline: Studio",
   "body": "No frames for 30 seconds",
-  "source_ref": "cam-fa049182",
-  "dedup_key": "mibee-nvr/connection/cam-fa049182",
+  "source_ref": "cam-example",
+  "dedup_key": "mibee-nvr/connection/cam-example",
   "resolved": false,
   "snapshot_url": "http://192.168.1.10:9090/api/ai/events/42/snapshot?api_key=mbv_...",
   "tags": { "camera_name": "Studio" }

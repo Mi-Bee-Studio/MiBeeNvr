@@ -18,7 +18,7 @@
    * and fires onseek.
    */
   import { findSegmentAt, parseDayStart, epochMsToDaySec, formatLength, type TimelineSegment } from '$lib/timeline-utils';
-  import { buildCameraRows, DAY_SECONDS, type CameraRow, type AudioSeg, type TimelineMergeMark, type TLRibbon } from '$lib/day-timeline-rows';
+  import { buildCameraRows, clampDay, DAY_SECONDS, type CameraRow, type AudioSeg, type TimelineMergeMark, type TLRibbon } from '$lib/day-timeline-rows';
   import type { Recording, Camera } from '$lib/api';
   import { classLabel, eventTypeLabel } from '$lib/ai-labels';
   import { t } from '$lib/i18n';
@@ -437,10 +437,6 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
 
   function cameraName(cam: Camera): string {
     return cam.name || cam.id;
-  }
-
-  function clampDay(sec: number): number {
-    return Math.max(0, Math.min(DAY_SECONDS, sec));
   }
 </script>
 

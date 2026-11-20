@@ -127,7 +127,7 @@ In a 4-camera surveillance grid where all cameras are H.265 (HTTPS, WebCodecs av
 - **#107 grid storm**: 4-camera H.265 grid stable after 30s+ soak; no console
   freeze; click responsiveness 100–200ms (the pre-fix storm froze the console
   within 55s). All H.265 cameras stayed on WebCodecs (never demoted to HLS).
-- **effect_update_depth_exceeded regression**: H80 (cam-608e6966) added to the
+- **effect_update_depth_exceeded regression**: A second H.265 camera added to the
   grid + 60s soak (past the 30s `noMediaTimer` + multiple WS reconnect cycles):
   no freeze, `allAlive: true`, expand/shrink/drag all responsive.
 - **#108 H80 black screen**: LiveView now shows **"实时" (live)** on WebCodecs

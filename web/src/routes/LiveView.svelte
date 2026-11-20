@@ -5,7 +5,6 @@
   import { startBackfill } from '$lib/api/transcoding';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings, AudioLines } from 'lucide-svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
-  import AudioWaveform from '$lib/components/AudioWaveform.svelte';
   import LiveAudioPlayer from '$lib/components/LiveAudioPlayer.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import PtzControl from '$lib/components/PtzControl.svelte';

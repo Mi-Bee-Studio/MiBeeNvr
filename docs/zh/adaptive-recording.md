@@ -67,7 +67,7 @@ v0.13 起这条链路有三种组合，按相机编码器行为选：
 ```yaml
 cameras:
   - id: "studio"
-    name: "工作室内"
+    name: "cam-indoor"
     protocol: "onvif"
     # ... 常规接入配置 ...
     recording_mode: "adaptive"   # 默认 "continuous" = 全帧率录制
@@ -99,7 +99,7 @@ cameras:
       video_exit: true         # false = 常驻延时（视频尖峰不退出）
 ```
 
-> 实测参考：静态工作室相机（2K H.265）从 ~2700MB/h 降到 ~688MB/h（含活动时段）；完全无人时段的稀疏段 5.6MB/248s，对比全帧率 ~190MB（约 34 倍）。
+> 实测参考：一台静态室内相机（2K H.265）从 ~2700MB/h 降到 ~688MB/h（含活动时段）；完全无人时段的稀疏段 5.6MB/248s，对比全帧率 ~190MB（约 34 倍）。
 
 ### 离线回放评估（eval-replay）
 

@@ -113,8 +113,8 @@ if (maxScore < confidenceThreshold) continue;
 
 | 相机 | 修复前 | 修复后 |
 |------|--------|--------|
-| cam 0（7-8楼转角） | 78 × `person:100%` | `no detections`（空场景） |
-| cam 2（视通） | 260 × `person:100%` | `no detections`（空场景） |
+| cam A (static corner) | 78 × `person:100%` | `no detections` (empty scene) |
+| cam B (street-facing) | 260 × `person:100%` | `no detections` (empty scene) |
 
 空场景现在正确地产生**零个框**。置信度阈值（0.5）终于有了区分度：背景噪声
 （logit <0 → sigmoid <0.5）被拒绝；真实检测（logit 5–12 → sigmoid 0.99+）

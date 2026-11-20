@@ -259,9 +259,8 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 // This is a thin wrapper over mp4util.BuildHvcC (the shared, single source of
 // truth for the hvcC record used by timelapse, merge, and muxer — see #236).
 // The shared helper uses conservative Main-tier / Main-profile / zeroed-compat
-// defaults rather than fully parsing the SPS, because several H.265 ONVIF
-// cameras in production (cam-fa049182 工作室内, cam-5b24e253 视通) emit an SPS
-// whose profile_tier_level is internally inconsistent (e.g. profile_idc=1 Main
+// defaults rather than fully parsing the SPS, because some H.265 ONVIF
+// cameras emit an SPS whose profile_tier_level is internally inconsistent (e.g. profile_idc=1 Main
 // paired with tier=1 High + a stray compat bit 0x40000000) — Windows Edge's
 // HEVC Video Extension enforces strict HEVC conformance and refuses to play
 // such an MP4 (DEMUXER_ERROR_NO_SUPPORTED_STREAMS). Marshaling the typed

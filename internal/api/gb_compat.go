@@ -1,8 +1,7 @@
 package api
 
 // Transitional gb shims: the api root's gb tests call these Handler methods
-// directly; they delegate into gbapi. Delete as the tests migrate (documented
-// once the tests migrate.
+// directly; they delegate into gbapi. Delete once the tests migrate.
 
 import (
 	"net/http"

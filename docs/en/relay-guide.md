@@ -289,7 +289,7 @@ cameras:
 
 ### Hardware Requirements
 
-**Banana Pi M5 Production Server:**
+**Example low-power ARM server:**
 - **Hardware Acceleration:** Uses v4l2m2m codec (vendor kernel)
 - **CPU Fallback:** Falls back to libx264 on mainline kernel
 - **Performance:** Hardware transcode at 1080p@30fps with < 10% CPU usage

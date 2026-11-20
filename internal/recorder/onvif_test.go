@@ -883,7 +883,7 @@ func TestDetectEncoding_DESCRIBEFails_FallsBackToONVIF(t *testing.T) {
 // createDelegate path (H264/H265/MJPEG/HTTP-JPEG) built delegate recorder
 // configs WITHOUT forwarding ONVIFConfig.RecordEnabled, so the delegate always
 // recorded (RecordEnabled=nil => record). This is the exact bug that blocked
-// timelapse-only mode for ONVIF cameras (e.g. 工作室内 + H80-9楼楼顶): setting
+// timelapse-only mode for ONVIF cameras (a static indoor cam plus an outdoor one): setting
 // recording_enabled=false had no effect, the camera kept writing h265 video
 // segments alongside the timelapse keyframe extractor.
 //

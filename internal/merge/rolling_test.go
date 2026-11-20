@@ -1102,7 +1102,7 @@ func TestShouldPurgeSingleton_AgeThreshold(t *testing.T) {
 // SELECT with `ORDER BY camera_id, started_at ASC LIMIT N`. A camera with a
 // large backlog that sorted early (e.g. cam-5xxx before cam-fxxx) consumed the
 // whole N-segment budget every cycle, so cameras sorting later were never
-// reached — production: cam-fa049182 (3969 pending) got zero backfill across
+// reached — a camera with a large backlog got zero backfill across
 // 3 weeks of operation while earlier-sorting cameras stayed stuck too.
 //
 // Fix: backfillHistorical now enumerates rolling-enabled cameras and queries

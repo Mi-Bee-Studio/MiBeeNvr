@@ -53,7 +53,7 @@ func (r *RollingMergeCoordinator) backfillHistorical(ctx context.Context) {
 	// across them. The previous implementation queried pending segments across
 	// ALL cameras in a single SELECT with `ORDER BY camera_id, started_at ASC
 	// LIMIT N`. That ordering meant a single camera with a large backlog
-	// (production: cam-fa049182 with ~4000 pending) starved every camera that
+	// (a camera with a large backlog) starved every camera that
 	// sorted after it — backfill never reached them at all. Per-camera queries
 	// with fair share guarantee every camera gets a slice of each cycle.
 	rollingCameras := make([]string, 0)

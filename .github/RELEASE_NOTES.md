@@ -110,7 +110,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install
 
 ## 发版操作流程
 
-1. **打 tag 前**:按 `docs/private/release-test-checklist.md` 完成实测(gitignored,本地清单)。
+1. **打 tag 前**:按本地发布实测清单完成验证(内部清单,不进公开仓)。
 2. **打 tag 推送**:`git tag vX.Y.Z && git push origin vX.Y.Z` → 触发 `release.yml`。
 3. **等 CI 完成**:确认二进制 + 多架构镜像推送成功。
 4. **手动重写 release body**:`gh release edit vX.Y.Z --notes-file <按本规范写的 md>`。

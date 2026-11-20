@@ -111,7 +111,7 @@ mibee-nvr validate-config --config /data/mibee-nvr.yaml
 |------|---------|-------------|
 | `--config <path>` | `mibee-nvr.yaml` | Config file to validate (same default path a bare `mibee-nvr` start would load) |
 
-Validation covers **illegal values** (ranges, formats, missing required fields) and surfaces **dangling references** at load time — the 2026-09-11 M5 incident was exactly that (a hand-edited YAML dropped a vision instance a camera still referenced, and the service restart-looped for ~2 minutes). Run it after every manual edit, before restarting the service.
+Validation covers **illegal values** (ranges, formats, missing required fields) and surfaces **dangling references** at load time (e.g. a hand-edited YAML dropping a vision instance a camera still references makes the service restart-loop). Run it after every manual edit, before restarting the service.
 
 ## download-model — Download the AI Model
 

@@ -116,7 +116,7 @@
 - **#107 宫格风暴**：4 相机 H.265 宫格浸泡 30 秒以上保持稳定；控制台无
   冻结；点击响应 100–200ms（修复前的风暴在 55 秒内冻结控制台）。所有
   H.265 相机保持在 WebCodecs（从未降级到 HLS）。
-- **effect_update_depth_exceeded 回归**：H80（cam-608e6966）加入宫格 +
+- **effect_update_depth_exceeded 回归**：第二台 H.265 相机加入宫格 +
   60 秒浸泡（越过 30 秒 `noMediaTimer` + 多轮 WS 重连周期）：无冻结，
   `allAlive: true`，展开/收起/拖拽全部响应正常。
 - **#108 H80 黑屏**：实时视图现在在 WebCodecs 上以正确的 H.265 解码器

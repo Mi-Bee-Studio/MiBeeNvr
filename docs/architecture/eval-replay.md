@@ -16,7 +16,7 @@
 
 ```json
 [
-  {"path": "/mnt/data/nvr/cam-xxx/202608/30/10/seg.mp4", "camera": "视通-9楼", "label": "rain"}
+  {"path": "recordings/cam-example/seg.mp4", "camera": "cam-example", "label": "rain"}
 ]
 ```
 
@@ -31,20 +31,20 @@
 
 ## 语料来源与登记
 
-- 语料文件**不进 git**——引用现网(M5)保留的录像样本,manifest 按需生成;
-- 每批样本在下方登记(日期 / 相机 / 标签 / 采集人):
-  - 2026-08-31: 视通-9楼 雨天白天 / 七楼门外 夜间低码率 / 工作室 静态 —— 7 天回归窗口首批(待生成 manifest);
+- 语料文件**不进 git**——引用本地保留的录像样本,manifest 按需生成;
+- 每批样本在下方登记(标签 / 场景 / 备注):
+  - 首批: 雨天白天 / 夜间低码率 / 静态场景 —— 7 天回归窗口(待生成 manifest);
 - 12h 回归巡检的实测数字应回填到对应标签的备注,校准离线结论。
 
-## 生成 manifest(在 M5 上)
+## 生成 manifest
 
 ```bash
-# 例:视通保留的 3 天里每小时抽 1 段,标 rain(雨期采集)
-ssh user@192.0.2.30 'python3 - <<EOF
+# 例:从样本库里每小时抽 1 段,标 rain(雨期采集)
+ssh user@example-host 'python3 - <<EOF
 import sqlite3, json, random
-db = sqlite3.connect("file:/mnt/data/nvr/mibee-nvr.db?mode=ro", uri=True)
+db = sqlite3.connect("file:recordings/mibee-nvr.db?mode=ro", uri=True)
 rows = db.execute("""select file_path from recordings
-  where camera_id="cam-5b24e253-0808-499d-bf4c-dbe9a8b2e3aa" order by started_at""").fetchall()
-print(json.dumps([{"path": r[0], "camera": "shitong", "label": "rain"} for r in rows], indent=1))
+  where camera_id="cam-example" order by started_at""").fetchall()
+print(json.dumps([{"path": r[0], "camera": "cam-example", "label": "rain"} for r in rows], indent=1))
 EOF' > rain.json
 ```

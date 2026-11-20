@@ -805,7 +805,7 @@ func TestBuildHvcC_ArrayNumNalusIsOne(t *testing.T) {
 		if arrType != wantTypes[i] {
 			t.Errorf("array %d: NAL_unit_type = %d, want %d", i, arrType, wantTypes[i])
 		}
-		// THE BUG: numNalus must be 1 (one NALU per array), NOT the NALU byte length.
+		// Regression: numNalus must be 1 (one NALU per array), NOT the NALU byte length.
 		numNalus := uint16(hvcC[off+1])<<8 | uint16(hvcC[off+2])
 		if numNalus != 1 {
 			t.Errorf("array %d (type %d): numNalus = %d, want 1 — "+
@@ -824,7 +824,7 @@ func TestBuildHvcC_ArrayNumNalusIsOne(t *testing.T) {
 // TestBuildHvcC_ConservativeTierAndCompat guards against the regression where
 // buildHvcC over-parsed the SPS and faithfully copied inconsistent
 // profile_tier_level fields into the hvcC header. The trigger in production
-// was an H.265 ONVIF camera (cam-fa049182 工作室内) whose SPS carried
+// was an H.265 ONVIF camera (cam-test-001 cam-studio) whose SPS carried
 // profile_idc=1 (Main) alongside tier=1 (High) and a stray compat bit
 // 0x40000000 — Windows Edge's HEVC Video Extension rejects such an hvcC as
 // non-compliant with PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS.
@@ -838,7 +838,7 @@ func TestBuildHvcC_ConservativeTierAndCompat(t *testing.T) {
 	t.Parallel()
 
 	vps := buildTestH265VPS()
-	// Inconsistent SPS captured from cam-fa049182 (Main profile_idc=1 with
+	// Inconsistent SPS captured from cam-test-001 (Main profile_idc=1 with
 	// High tier + stray compat bit). Decoded:
 	//   sps[0]=0x42 NAL header byte 1 (type=33 SPS)
 	//   sps[1]=0x01 layerID=0 + temporalID=1

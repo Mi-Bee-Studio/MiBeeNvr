@@ -461,7 +461,7 @@ func TestIsSOAPFaultStatus(t *testing.T) {
 		err  string
 		want bool
 	}{
-		// Real device responses (captured from 视通 NVR/encoder PTZ GetStatus)
+		// Real device responses (PTZ GetStatus captured from an ONVIF encoder)
 		{"status400 with SOAP-ENV envelope", `raw GetStatus failed: SOAP request failed with status 400: <?xml version="1.0"?><SOAP-ENV:Envelope`, true},
 		{"status400 with Fault", `SOAP request failed with status 400: <s:Fault><s:Text>no ptz</s:Text>`, true},
 		{"status500 with envelope", `failed with status 500: <Envelope xmlns=`, true},

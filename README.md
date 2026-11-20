@@ -107,7 +107,7 @@ Self-measured across three hardware tiers — methodology, judging criteria, and
 | Any (idle) | — | 38 MB RSS, 122 ms cold start |
 | x86 desktop (i5-12600KF) | 68 cams · 226 Mbps recording, +32 concurrent viewers | 24% CPU, API p50 < 11 ms, zero failures |
 | RK3399 NAS (low tier) | 28 cams recording | 20–23% CPU (storage-bound, eMMC) |
-| Banana Pi M5 (production) | 18 cams, 80% iowait storm | health API p50 13.5 ms |
+| Low-power ARM SBC (representative) | 18 cams, 80% iowait storm | health API p50 13.5 ms |
 
 ## Observability
 

@@ -12,6 +12,7 @@
   import { downloadRecording as apiDownloadRecording } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
+  import { activeTranscodeTask } from '$lib/library-list-helpers';
   import { enqueueTranscodeTask, getTranscodingStatus, getTranscodingTasks } from '$lib/api/transcoding';
 
   interface Props {
@@ -58,8 +59,7 @@
   let transcodeTask = $derived(findTranscodeTask());
 
   function findTranscodeTask(): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find((tk) => tk.recording_id === currentId);
+    return activeTranscodeTask(transcodingStatus, currentId);
   }
 
   async function loadTranscodingStatus() {
@@ -228,7 +228,7 @@
         </div>
       {:else if transcodeTask.status === 'failed'}
         <div class="flex items-center gap-2">
-          <span class="badge badge-danger text-xs">{t('transcoding.failed')}</span>
+          <span class="badge badge-error text-xs">{t('transcoding.failed')}</span>
           <span class="text-xs th-text-secondary">{transcodeTask.error || ''}</span>
         </div>
       {:else}

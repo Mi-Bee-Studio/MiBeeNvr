@@ -16,7 +16,7 @@ func TestIsValidStableID(t *testing.T) {
 		// Accept — real formats seen on production cameras.
 		{"lowercase 12-hex MAC", "744dbd988218", true},
 		{"uppercase efuse MAC", "88492D665CCF", true},
-		{"colon-separated MAC", "74:4d:bd:98:82:18", true},
+		{"colon-separated MAC", "02:00:00:00:00:01", true},
 		{"vendor serial with dash", "SN-AAA", true},
 		{"xiaomi-style serial", "XIAOMI-CAM-001", true},
 		{"underscore separator", "MiBee_Cam_001", true},

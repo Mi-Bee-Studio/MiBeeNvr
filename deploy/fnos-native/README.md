@@ -31,7 +31,7 @@ app/ui/                desktop launcher config + icons (URL mode, port 9091)
 First boot generates `${TRIM_PKGVAR}/mibee-nvr.yaml` (TRIM_PKGVAR =
 `/vol1/@appdata/mibee-nvr-native`) with port-clash-free defaults: HTTP :9091,
 RTSP/FTP/LAN-discovery off, recordings under the package data dir, admin
-password `mibee-native` (change it). Edit the yaml + restart to customize —
+a default admin password (change it on first login — see the packaged config). Edit the yaml + restart to customize —
 the full option set is documented in the top-level `docs/`.
 
 The desktop entry opens through the **fnOS unified gateway** (iframe at

@@ -10,7 +10,7 @@
 //
 // Corpus format (JSON array; paths absolute or relative to the manifest):
 //
-//	[{"path": "/mnt/data/nvr/cam-…/seg.mp4", "camera": "视通-9楼", "label": "rain"}]
+//	[{"path": "recordings/cam-example/seg.mp4", "camera": "cam-example", "label": "rain"}]
 //
 // Labels are free-form but the framework convention is: rain / lowbitrate /
 // static / active — see docs/architecture/eval-replay.md.

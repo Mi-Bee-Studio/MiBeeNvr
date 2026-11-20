@@ -215,7 +215,7 @@ Driven a real Edge 150 instance over CDP (`msedge.exe
   `ee7b0660...` before the fix).
 - **ORT session create**: `ort.InferenceSession.create(buf, {executionProviders:
   ['wasm']})` → `SESSION OK inputs=["images"]` (was `ERROR_CODE: 7`).
-- **LiveView AI indicator**: 视通 camera (H.265, online) shows **"AI 就绪"**
+- **LiveView AI indicator**: an H.265 camera (online) shows **"AI 就绪"**
   in the status bar (was "AI ✗ ERROR_CODE 7"). Screenshot confirms the video
   is playing and the green AI-ready chip is visible.
 - All existing `TestStreamingGzip_*` tests still pass; new regression test

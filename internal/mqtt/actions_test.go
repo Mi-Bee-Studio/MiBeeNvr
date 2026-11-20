@@ -111,7 +111,7 @@ func TestActionDispatcher_Snapshot_LogsOnly(t *testing.T) {
 
 	assert.Never(t, func() bool {
 		return len(fake.started())+len(fake.stopped()) > 0
-	}, 500*time.Millisecond, 50*time.Millisecond, "snapshot is not wired to the lifecycle yet")
+	}, 500*time.Millisecond, 50*time.Millisecond, "nil snapshot runner must not touch the lifecycle")
 }
 
 func TestActionDispatcher_AlreadyRunning_Idempotent(t *testing.T) {
