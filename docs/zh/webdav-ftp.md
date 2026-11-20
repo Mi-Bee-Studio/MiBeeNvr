@@ -1,6 +1,6 @@
 # WebDAV / FTP 存储
 
-> 适用于 MiBeeNvr v0.13.0
+> 适用于当前版本（MiBeeNvr）
 
 MiBee NVR 内置 WebDAV 和 FTP 服务器，支持只读或读写模式访问录像文件。
 

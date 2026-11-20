@@ -1,6 +1,6 @@
 # Docker Deployment
 
-> For MiBeeNvr v0.13.0
+> Applies to the current MiBeeNvr release
 
 Deploy MiBee NVR quickly using Docker Compose.
 

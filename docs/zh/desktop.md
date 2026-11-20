@@ -1,6 +1,6 @@
 # 桌面版（Windows / macOS）
 
-> 适用于 MiBeeNvr v0.13.0 · 全新平台形态，与 Docker / 裸机 Linux 版功能一致
+> 适用于当前版本（MiBeeNvr） · 全新平台形态，与 Docker / 裸机 Linux 版功能一致
 
 v0.13.0 起 MiBee NVR 提供 **Windows 与 macOS 桌面版**：单文件安装器、系统托盘（Windows）/ 菜单栏助手（macOS）、开箱即用的本机免密信任模型。适合把一台常开的 Windows 小主机或 Mac mini 变成家用 NVR，无需 Docker 与命令行。
 

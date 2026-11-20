@@ -1,6 +1,6 @@
 # Docker 部署
 
-> 适用于 MiBeeNvr v0.13.0
+> 适用于当前版本（MiBeeNvr）
 
 使用 Docker Compose 快速部署 MiBee NVR。
 
