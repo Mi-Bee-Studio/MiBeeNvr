@@ -152,3 +152,49 @@ func TestGB28181Adaptive_UnarmedRecordsContinuously(t *testing.T) {
 	feedCalmAUs(t, rec, 40, 90000+3000)
 	require.Equal(t, 41, gbAdaFrameCount(rec), "unarmed recorder must write every frame")
 }
+
+// TestGB28181Adaptive_AmbientAudioKeepsDiskTrack pins the #496 ambient-audio
+// semantics for the GB28181 recorder: with ambient_audio on, audioSparse is
+// cleared while sparse so the continuous G.711 track still lands in the MP4
+// segment (and the rolling merge renders its atmosphere bed); with it off,
+// sparse mode drops the disk audio. Live fan-out is never gated either way.
+func TestGB28181Adaptive_AmbientAudioKeepsDiskTrack(t *testing.T) {
+	for _, ambient := range []bool{false, true} {
+		name := "off"
+		if ambient {
+			name = "on"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := AdaptiveConfig{
+				CalmThreshold:     150 * time.Millisecond,
+				TimelapseInterval: 100 * time.Millisecond,
+				SpikeFactor:       3.0,
+				MaxGOPBuffer:      16 << 20,
+				AutoNoiseFloor:    false,
+				AmbientAudio:      ambient,
+			}
+			store, err := storage.NewManager(t.TempDir())
+			require.NoError(t, err)
+			rec := NewGB28181Recorder(GB28181Config{
+				CameraID:      "gb-ambient-" + name,
+				Encoding:      "h264",
+				SegmentDur:    10 * time.Minute,
+				Store:         store,
+				RecordEnabled: true,
+				AudioEnabled:  true,
+				Adaptive:      &cfg,
+			}, nil)
+			rec.Hub = streamhub.New()
+			rec.Hub.SetCameraID(rec.cfg.CameraID)
+			require.NoError(t, rec.Start(context.Background()))
+			rec.OnInvite()
+
+			enterGB28181Sparse(t, rec)
+			require.True(t, rec.gate.Timelapse())
+			require.Equal(t, !ambient, rec.audioSparse.Load(),
+				"ambient_audio=%v must %s disk audio while sparse", ambient,
+				map[bool]string{true: "keep", false: "drop"}[ambient])
+			_ = rec.Stop()
+		})
+	}
+}
