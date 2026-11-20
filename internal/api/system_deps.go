@@ -29,3 +29,9 @@ type (
 	TranscodeDownloader = systemapi.TranscodeDownloader
 	StorageMigrator     = systemapi.StorageMigrator
 )
+
+// SetTranscodeManager and SetStorageMigrator are app-layer wiring setters
+// (builders_http.go); they stay on Handler after the system shim cleanup.
+func (h *Handler) SetTranscodeManager(mgr TranscodeManagerAPI) { h.transcodeMgr = mgr }
+
+func (h *Handler) SetStorageMigrator(m StorageMigrator) { h.migrationMgr = m }

@@ -1,12 +1,7 @@
 package api
 
 import (
-	"net/http"
-
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 )
 
 // streamsDeps adapts the Handler's fields to the streamsapi domain Deps. All
@@ -56,26 +51,4 @@ func NewStreamRegistry() *StreamRegistry { return streamsapi.NewStreamRegistry()
 // in streamsapi.
 func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {
 	h.streamRegistry = reg
-}
-
-// Transitional shims over the moved streaming helpers — the remaining
-// in-package tests reference them; delete as those tests migrate to
-// streamsapi (transitional — delete once the callers migrate).
-func getCodecParams(rec model.Recorder) (model.Format, []byte, []byte, []byte) {
-	return recorder.CodecParamsOf(rec)
-}
-
-func parseQuality(r *http.Request) (string, error) { return streamsapi.ParseQuality(r) }
-
-func subKey(cameraID string) string { return streamsapi.SubKey(cameraID) }
-
-// Quality negotiation constants mirrored for the remaining in-package tests
-// (the source of truth lives in streamsapi).
-const (
-	qualityMain = "main"
-	qualitySub  = "sub"
-)
-
-func setupAudioForWS(mgr *wsstream.Manager, id string, rec model.Recorder) {
-	streamsapi.SetupAudioForWS(mgr, id, rec)
 }

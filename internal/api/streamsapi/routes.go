@@ -46,9 +46,13 @@ func Register(r chi.Router, deps Deps) {
 // Quality values for the live egress endpoints. "main" is the default;
 // "sub" selects the camera's on-demand sub-stream (falls back to main when
 // the camera has none — callers detect the fallback via X-Stream-Quality).
+// Exported for the api root's quality-negotiation tests.
 const (
 	qualityMain = "main"
 	qualitySub  = "sub"
+
+	QualityMain = qualityMain
+	QualitySub  = qualitySub
 )
 
 // ParseQuality parses the ?quality= parameter ("" and "main" → main).

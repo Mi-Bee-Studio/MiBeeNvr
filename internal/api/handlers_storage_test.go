@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 )
@@ -28,7 +29,7 @@ func TestStorageCandidatesEndpoint(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/storage/candidates", nil)
 	rec := httptest.NewRecorder()
-	h.handleStorageCandidates(rec, req)
+	systemapi.HandleStorageCandidates(systemDeps(h), rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -55,7 +56,7 @@ func TestStorageCandidatesEndpoint(t *testing.T) {
 	// A candidate whose directory does not exist must NOT be offered.
 	h.config.Storage.Candidates = []string{filepath.Join(extra, "unplugged")}
 	rec2 := httptest.NewRecorder()
-	h.handleStorageCandidates(rec2, req)
+	systemapi.HandleStorageCandidates(systemDeps(h), rec2, req)
 	if err := json.Unmarshal(rec2.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestUpdateSettingsStorageRoot(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(bodyBytes))
 	rec := httptest.NewRecorder()
-	h.handleUpdateSettings(rec, req)
+	systemapi.HandleUpdateSettings(systemDeps(h), rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -118,7 +119,7 @@ func TestUpdateSettingsStorageRootRejectsRelative(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader([]byte(`{"storage":{"root_dir":"relative/path"}}`)))
 	rec := httptest.NewRecorder()
-	h.handleUpdateSettings(rec, req)
+	systemapi.HandleUpdateSettings(systemDeps(h), rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

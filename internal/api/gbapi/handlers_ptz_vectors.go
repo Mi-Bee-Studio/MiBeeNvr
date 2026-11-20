@@ -23,11 +23,12 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 )
 
-// PTZ suppress windows: how long the pixgate pixel gate stays blind after a
-// camera movement command (moved/short variants).
+// PTZSuppressWindow* are how long the pixgate pixel gate stays blind after a
+// camera movement command (moved/short variants). Exported for the api root's
+// PTZ suppressor tests.
 const (
-	ptzSuppressWindowMove  = 30 * time.Second
-	ptzSuppressWindowShort = 8 * time.Second
+	PTZSuppressWindowMove  = 30 * time.Second
+	PTZSuppressWindowShort = 8 * time.Second
 )
 
 // gbPTZFromVector maps an ONVIF-style continuous-move vector onto the GB/T
@@ -130,7 +131,7 @@ func (s *server) sendGB28181PTZ(w http.ResponseWriter, channelID, direction stri
 
 func (s *server) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	s.deps.PTZSuppress(cameraID, ptzSuppressWindowMove)
+	s.deps.PTZSuppress(cameraID, PTZSuppressWindowMove)
 	var req struct {
 		Mode string  `json:"mode"`
 		Pan  float64 `json:"pan"`
@@ -189,7 +190,7 @@ func (s *server) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	s.deps.PTZSuppress(cameraID, ptzSuppressWindowShort)
+	s.deps.PTZSuppress(cameraID, PTZSuppressWindowShort)
 	if s.cameraProtocol(r, cameraID) == "gb28181" {
 		s.handleGB28181PTZStop(w, r, cameraID)
 		return
@@ -348,7 +349,7 @@ func (s *server) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	s.deps.PTZSuppress(cameraID, ptzSuppressWindowMove)
+	s.deps.PTZSuppress(cameraID, PTZSuppressWindowMove)
 	token := chi.URLParam(r, "token")
 	if s.cameraProtocol(r, cameraID) == "gb28181" {
 		s.handleGB28181PTZGoToPreset(w, r, cameraID, token)

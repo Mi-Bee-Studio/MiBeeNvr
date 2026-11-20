@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -473,7 +474,7 @@ func TestIsSOAPFaultStatus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, isSOAPFaultStatus(tc.err))
+			require.Equal(t, tc.want, gbapi.IsSOAPFaultStatus(tc.err))
 		})
 	}
 }
@@ -485,7 +486,7 @@ func TestHandleONVIFSnapshotError_ErrorMessage(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
 	// A generic error (not a typed sentinel) hits the default branch.
-	handleONVIFSnapshotError(w, "cam-1", errGeneric("boom"))
+	gbapi.HandleONVIFSnapshotError(w, "cam-1", errGeneric("boom"))
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.NotContains(t, w.Body.String(), "PTZ", "snapshot error must not say PTZ")
 	require.Contains(t, w.Body.String(), "snapshot")

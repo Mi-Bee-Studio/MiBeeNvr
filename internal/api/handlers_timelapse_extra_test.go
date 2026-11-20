@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
@@ -171,7 +172,7 @@ func TestFormatOffset(t *testing.T) {
 		-3600 * 10: "-10",
 	}
 	for in, want := range cases {
-		require.Equal(t, want, formatOffset(in), "input %d", in)
+		require.Equal(t, want, systemapi.FormatOffset(in), "input %d", in)
 	}
 }
 

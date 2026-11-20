@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/assert"
@@ -296,33 +297,33 @@ func TestBatchDeleteRecordings_InvalidBody(t *testing.T) {
 
 func TestFormatUptime_Hours(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "1h 30m 0s", formatUptime(90*time.Minute))
+	require.Equal(t, "1h 30m 0s", systemapi.FormatUptime(90*time.Minute))
 }
 
 func TestFormatUptime_Minutes(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "5m 30s", formatUptime(330*time.Second))
+	require.Equal(t, "5m 30s", systemapi.FormatUptime(330*time.Second))
 }
 
 func TestFormatUptime_SecondsOnly(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "45s", formatUptime(45*time.Second))
+	require.Equal(t, "45s", systemapi.FormatUptime(45*time.Second))
 }
 
 func TestFormatUptime_Zero(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "0s", formatUptime(0))
+	require.Equal(t, "0s", systemapi.FormatUptime(0))
 }
 
 func TestFormatUptime_ExactHour(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "1h 0m 0s", formatUptime(1*time.Hour))
+	require.Equal(t, "1h 0m 0s", systemapi.FormatUptime(1*time.Hour))
 }
 
 func TestFormatUptime_LargeDuration(t *testing.T) {
 	t.Parallel()
 	d := 72*time.Hour + 15*time.Minute + 30*time.Second
-	require.Equal(t, "72h 15m 30s", formatUptime(d))
+	require.Equal(t, "72h 15m 30s", systemapi.FormatUptime(d))
 }
 
 // --- handleStats tests ---

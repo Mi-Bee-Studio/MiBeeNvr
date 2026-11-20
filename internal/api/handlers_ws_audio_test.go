@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/stretchr/testify/require"
@@ -59,7 +60,7 @@ func TestSetupAudioForWS_NoAudioNoOp(t *testing.T) {
 
 	// Empty codec string → setupAudioForWS returns before touching the manager.
 	rec := &mockAudioRecorder{codec: "", rate: 0, channels: 0}
-	require.NotPanics(t, func() { setupAudioForWS(h.wsMgr, "cam-silent", rec) })
+	require.NotPanics(t, func() { streamsapi.SetupAudioForWS(h.wsMgr, "cam-silent", rec) })
 }
 
 func TestSetupAudioForWS_NonAudioRecorderNoOp(t *testing.T) {
@@ -69,7 +70,7 @@ func TestSetupAudioForWS_NonAudioRecorderNoOp(t *testing.T) {
 	// A recorder that does NOT implement audioInfoProvider: setupAudioForWS
 	// unwraps delegates, finds no provider, and returns without error.
 	rec := silentRecorder{}
-	require.NotPanics(t, func() { setupAudioForWS(h.wsMgr, "cam-noaudio", rec) })
+	require.NotPanics(t, func() { streamsapi.SetupAudioForWS(h.wsMgr, "cam-noaudio", rec) })
 }
 
 // silentRecorder implements model.Recorder but NOT audioInfoProvider.

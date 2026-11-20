@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 )
@@ -28,14 +29,12 @@ func gbDeps(h *Handler) gbapi.Deps {
 			h.suppressPTZMotion(cameraID, window)
 		},
 		XiaomiVectorMove: func(w http.ResponseWriter, cameraID string, pan, tilt, zoom float64) {
-			h.handleXiaomiVectorPTZMove(w, cameraID, pan, tilt, zoom)
+			camerasapi.HandleXiaomiVectorPTZMove(camerasDeps(h), w, cameraID, pan, tilt, zoom)
 		},
 		XiaomiMotorCommand: func(cameraID, direction string, speed int) error {
-			return h.xiaomiMotorCommand(cameraID, direction, speed)
+			return camerasapi.XiaomiMotorCommand(camerasDeps(h), cameraID, direction, speed)
 		},
-		XiaomiPTZStatusCode: func(err error) int {
-			return h.xiaomiPTZStatusCode(err)
-		},
+		XiaomiPTZStatusCode: camerasapi.XiaomiPTZStatusCode,
 	}
 }
 

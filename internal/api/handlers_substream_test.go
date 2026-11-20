@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,16 +22,16 @@ func TestParseQuality(t *testing.T) {
 		want  string
 		valid bool
 	}{
-		{"", qualityMain, true},
-		{"main", qualityMain, true},
-		{"sub", qualitySub, true},
+		{"", streamsapi.QualityMain, true},
+		{"main", streamsapi.QualityMain, true},
+		{"sub", streamsapi.QualitySub, true},
 		{"MAIN", "", false},
 		{"hd", "", false},
-		{"", qualityMain, true},
+		{"", streamsapi.QualityMain, true},
 	}
 	for _, tc := range cases {
 		r := httptest.NewRequest(http.MethodGet, "/api/cameras/cam-1/stream.flv?quality="+tc.raw, nil)
-		got, err := parseQuality(r)
+		got, err := streamsapi.ParseQuality(r)
 		if !tc.valid {
 			require.Error(t, err, "quality=%q", tc.raw)
 			continue
@@ -41,7 +42,7 @@ func TestParseQuality(t *testing.T) {
 }
 
 func TestSubKey(t *testing.T) {
-	require.Equal(t, "cam-1/sub", subKey("cam-1"))
+	require.Equal(t, "cam-1/sub", streamsapi.SubKey("cam-1"))
 }
 
 // WHEP validates the quality parameter before service availability — a bad

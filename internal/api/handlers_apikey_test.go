@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/go-chi/chi/v5"
@@ -34,7 +35,7 @@ func postGenerateKey(t *testing.T, h *Handler, name string) string {
 	b, _ := json.Marshal(map[string]string{"name": name})
 	req := httptest.NewRequest(http.MethodPost, "/api/settings/api-keys", bytes.NewReader(b))
 	rec := httptest.NewRecorder()
-	h.handleGenerateAPIKey(rec, req)
+	systemapi.HandleGenerateAPIKey(systemDeps(h), rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 	var resp struct {
 		Key string `json:"key"`
@@ -46,7 +47,10 @@ func postGenerateKey(t *testing.T, h *Handler, name string) string {
 func deleteRevokeKey(t *testing.T, h *Handler, name string) {
 	t.Helper()
 	r := chi.NewRouter()
-	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
+	deps := systemDeps(h)
+	r.Delete("/api/settings/api-keys/{name}", func(w http.ResponseWriter, req *http.Request) {
+		systemapi.HandleRevokeAPIKey(deps, w, req)
+	})
 	req := httptest.NewRequest(http.MethodDelete, "/api/settings/api-keys/"+name, nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -80,7 +84,7 @@ func TestBuildAPIKeyInfoIncludesRevokedAndLastUsed(t *testing.T) {
 	deleteRevokeKey(t, h, "tablet")
 	// The middleware store drops revoked keys, but the list API keeps showing
 	// them (with the revoked flag + last-used) for audit.
-	info := buildAPIKeyInfo(h.config.APIKeys, h.apiKeyLastUsed())
+	info := systemapi.BuildAPIKeyInfo(h.config.APIKeys, systemapi.APIKeyLastUsed(systemDeps(h)))
 	require.Len(t, info, 1)
 	require.Equal(t, "tablet", info[0]["name"])
 	require.Equal(t, true, info[0]["revoked"])
@@ -92,7 +96,7 @@ func TestBuildAPIKeyInfoNoStore(t *testing.T) {
 	keys := []config.APIKeyConfig{
 		{Key: "mbv_abcdef1234567890", Name: "vision", Revoked: false},
 	}
-	info := buildAPIKeyInfo(keys, nil)
+	info := systemapi.BuildAPIKeyInfo(keys, nil)
 	require.Len(t, info, 1)
 	require.Equal(t, false, info[0]["revoked"])
 	_, hasLastUsed := info[0]["last_used"]
@@ -105,7 +109,7 @@ func mintExpectStatus(t *testing.T, h *Handler, name string) (string, int) {
 	b, _ := json.Marshal(map[string]string{"name": name})
 	req := httptest.NewRequest(http.MethodPost, "/api/settings/api-keys", bytes.NewReader(b))
 	rec := httptest.NewRecorder()
-	h.handleGenerateAPIKey(rec, req)
+	systemapi.HandleGenerateAPIKey(systemDeps(h), rec, req)
 	var resp struct {
 		Key string `json:"key"`
 	}
@@ -143,12 +147,15 @@ func TestRevokeAPIKeyMarksAllDuplicates(t *testing.T) {
 		{Key: "mbv_" + strings.Repeat("a", 40), Name: "tablet"},
 		{Key: "mbv_" + strings.Repeat("b", 40), Name: "tablet"},
 	}
-	h.syncAPIKeyStore()
+	systemapi.SyncAPIKeyStore(systemDeps(h))
 	_, ok := keyStore.Lookup("mbv_" + strings.Repeat("a", 40))
 	require.True(t, ok)
 
 	r := chi.NewRouter()
-	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
+	deps := systemDeps(h)
+	r.Delete("/api/settings/api-keys/{name}", func(w http.ResponseWriter, req *http.Request) {
+		systemapi.HandleRevokeAPIKey(deps, w, req)
+	})
 	req := httptest.NewRequest(http.MethodDelete, "/api/settings/api-keys/tablet", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)

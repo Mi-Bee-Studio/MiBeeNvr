@@ -1,7 +1,6 @@
 package api
 
 import (
-	"net/http"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -73,17 +72,3 @@ type (
 	OnboardingService         = camerasapi.OnboardingService
 	TimeSyncOps               = camerasapi.TimeSyncOps
 )
-
-// Transitional shims: the GB domain's PTZ dispatch (still in the api root)
-// delegates Xiaomi cameras into the cameras domain.
-func (h *Handler) handleXiaomiVectorPTZMove(w http.ResponseWriter, cameraID string, pan, tilt, zoom float64) {
-	camerasapi.HandleXiaomiVectorPTZMove(camerasDeps(h), w, cameraID, pan, tilt, zoom)
-}
-
-func (h *Handler) xiaomiMotorCommand(cameraID, direction string, speed int) error {
-	return camerasapi.XiaomiMotorCommand(camerasDeps(h), cameraID, direction, speed)
-}
-
-func (h *Handler) xiaomiPTZStatusCode(err error) int {
-	return camerasapi.XiaomiPTZStatusCode(err)
-}

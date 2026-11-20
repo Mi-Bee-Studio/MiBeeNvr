@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +16,7 @@ import (
 // saturation was 73% iowait with LOW cpu busy — invisible in the dashboard
 // because /api/stats/system never reported iowait at all.
 func TestParseProcStatIowait(t *testing.T) {
-	total, idle, iowait, err := parseProcStat([]byte(
+	total, idle, iowait, err := systemapi.ParseProcStat([]byte(
 		"cpu  100 20 30 400 50 5 10 0 0 0\n" +
 			"cpu0 50 10 15 200 25 2 5 0 0 0\n" +
 			"intr 12345\n"))
@@ -26,21 +27,21 @@ func TestParseProcStatIowait(t *testing.T) {
 }
 
 func TestParseProcStatMalformed(t *testing.T) {
-	_, _, _, err := parseProcStat([]byte("cpu  1 2 3\n"))
+	_, _, _, err := systemapi.ParseProcStat([]byte("cpu  1 2 3\n"))
 	require.Error(t, err)
-	_, _, _, err = parseProcStat(nil)
+	_, _, _, err = systemapi.ParseProcStat(nil)
 	require.Error(t, err)
 }
 
 // TestParseLoadAvg pins the /proc/loadavg parser ("0.74 2.39 4.92 3/421 12345").
 func TestParseLoadAvg(t *testing.T) {
-	one, five, fifteen, err := parseLoadAvg([]byte("0.74 2.39 4.92 3/421 12345\n"))
+	one, five, fifteen, err := systemapi.ParseLoadAvg([]byte("0.74 2.39 4.92 3/421 12345\n"))
 	require.NoError(t, err)
 	require.InDelta(t, 0.74, one, 0.0001)
 	require.InDelta(t, 2.39, five, 0.0001)
 	require.InDelta(t, 4.92, fifteen, 0.0001)
 
-	_, _, _, err = parseLoadAvg([]byte("garbage"))
+	_, _, _, err = systemapi.ParseLoadAvg([]byte("garbage"))
 	require.Error(t, err)
 }
 
@@ -55,7 +56,7 @@ func TestHandleSystemStatsExtendedFields(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/stats/system", nil)
 	rr := httptest.NewRecorder()
-	h.handleSystemStats(rr, req)
+	systemapi.HandleSystemStats(systemDeps(h), rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	var body struct {

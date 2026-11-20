@@ -4,9 +4,9 @@ import (
 	"net/http"
 )
 
-// Handle runs the named domain handler against deps — the compat surface the
-// api root's remaining gb tests call through their Handler shims. Names match
-// the pre-extraction method names.
+// Handle runs the named domain handler against deps — the api root's GB tests
+// call through it instead of the pre-extraction Handler methods. Names match
+// the former method names.
 func Handle(deps Deps, name string) http.HandlerFunc {
 	s := &server{deps: deps}
 	handlers := map[string]http.HandlerFunc{
@@ -21,22 +21,15 @@ func Handle(deps Deps, name string) http.HandlerFunc {
 		"handlePTZChannel":             s.handlePTZChannel,
 		"handleChannelDeviceControl":   s.handleChannelDeviceControl,
 		"handleChannelRecords":         s.handleChannelRecords,
-		"handleChannelPlaybackStart":   s.handleChannelPlaybackStart,
 		"handleChannelPlaybackStatus":  s.handleChannelPlaybackStatus,
 		"handleChannelPlaybackStop":    s.handleChannelPlaybackStop,
 		"handleChannelPlaybackControl": s.handleChannelPlaybackControl,
-		"handleGB28181TalkWS":          s.handleGB28181TalkWS,
 		"handleGB28181TalkStatus":      s.handleGB28181TalkStatus,
-		"handleGB28181ChannelSnapshot": s.handleGB28181ChannelSnapshot,
-		"handleGB28181ChannelRecord":   s.handleGB28181ChannelRecord,
-		"handleChannelLensControl":     s.handleChannelLensControl,
-		"handleChannelAuxSwitch":       s.handleChannelAuxSwitch,
-		"handleChannelDownloadStart":   s.handleChannelDownloadStart,
 	}
 	return handlers[name]
 }
 
-// MapGB28181PTZError is the exported PTZ error mapper (test compat).
+// MapGB28181PTZError is the exported PTZ error mapper.
 func MapGB28181PTZError(deps Deps, w http.ResponseWriter, err error) {
 	(&server{deps: deps}).mapGB28181PTZError(w, err)
 }

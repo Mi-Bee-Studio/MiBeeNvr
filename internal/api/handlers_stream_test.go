@@ -35,8 +35,8 @@ func TestHLSStreamHandler_Name(t *testing.T) {
 // TestGetCodecParams_JPEGRecorders guards the ESP32 MiBeeCam live-preview path.
 // HTTP-JPEG and RTSP-MJPEG recorders must report a JPEG-family codec so that
 // /protocols advertises the "mjpeg" protocol (served via latest-frame polling).
-// Regression: previously these returned "" → /protocols was empty → the frontend
-// could not live-preview ONVIF-JPEG cameras.
+// Regression: previously recorder.CodecParamsOf returned "" → /protocols was
+// empty → the frontend could not live-preview ONVIF-JPEG cameras.
 func TestGetCodecParams_JPEGRecorders(t *testing.T) {
 	t.Parallel()
 
@@ -45,7 +45,7 @@ func TestGetCodecParams_JPEGRecorders(t *testing.T) {
 		rec := recorder.NewHTTPJPEGRecorder(recorder.HTTPJPEGConfig{
 			CameraID: "cam-jpeg", URL: "http://1.2.3.4:81/stream",
 		}, nil)
-		codec, sps, pps, vps := getCodecParams(rec)
+		codec, sps, pps, vps := recorder.CodecParamsOf(rec)
 		require.Equal(t, model.EncJPEG, codec, "HTTPJPEGRecorder must report jpeg codec")
 		require.Nil(t, sps, "no SPS for JPEG")
 		require.Nil(t, pps, "no PPS for JPEG")
@@ -57,7 +57,7 @@ func TestGetCodecParams_JPEGRecorders(t *testing.T) {
 		rec := recorder.NewMJPEGRecorder(recorder.MJPEGConfig{
 			CameraID: "cam-mjpeg", RTSPURL: "rtsp://1.2.3.4/stream",
 		}, nil)
-		codec, _, _, _ := getCodecParams(rec)
+		codec, _, _, _ := recorder.CodecParamsOf(rec)
 		require.Equal(t, model.FormatMJPEG, codec, "MJPEGRecorder must report mjpeg codec")
 	})
 }
