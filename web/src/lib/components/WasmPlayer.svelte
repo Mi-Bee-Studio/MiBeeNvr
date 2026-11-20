@@ -12,6 +12,8 @@
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
   import { createStateDispatcher } from '$lib/player/dispatch';
 import { WebGPURenderer } from '$lib/webgpu-renderer';
+  import { Webgl2Renderer } from '$lib/webgl-renderer';
+  import { filterDetectionsByZones } from '$lib/ai-detection/zones';
   import AiOverlay from './AiOverlay.svelte';
   import { type Detection } from '$lib/ai-detection/inference';
   import { getInferenceClient } from '$lib/ai-detection/inference-client';
@@ -57,10 +59,7 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
   let destroyed = false;
 
   // WebGL2 rendering
-  let gl: WebGL2RenderingContext | null = null;
-  let glProgram: WebGLProgram | null = null;
-  let glTexture: WebGLTexture | null = null;
-  let glVao: WebGLVertexArrayObject | null = null;
+  const webglRenderer = new Webgl2Renderer();
 
   // Dedicated Canvas2D context for the WASM (libde265) H.265 path on plain HTTP.
   // A canvas can only hold ONE context type — if WebGL2 was ever acquired on it
@@ -152,30 +151,6 @@ let webgpuRenderer: WebGPURenderer | null = null;
   // sees the call. Kept as a cheap local short-circuit.
   let aiBusy = false;
 
-  // ─── Zone filtering ──────────────────────────────────────────────
-
-  function pointInPolygon(px: number, py: number, polygon: number[][]): boolean {
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      const xi = polygon[i][0], yi = polygon[i][1];
-      const xj = polygon[j][0], yj = polygon[j][1];
-      if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
-        inside = !inside;
-      }
-    }
-    return inside;
-  }
-
-  function filterDetectionsByZones(detections: Detection[]): Detection[] {
-    if (canvasWidth === 0 || canvasHeight === 0) return detections;
-    const enabledZones = aiZones.filter((z) => z.camera_id === cameraId && z.enabled);
-    if (enabledZones.length === 0) return detections;
-    return detections.filter((d) => {
-      const cx = (d.bbox[0] + d.bbox[2]) / (2 * canvasWidth);
-      const cy = (d.bbox[1] + d.bbox[3]) / (2 * canvasHeight);
-      return enabledZones.some((z) => pointInPolygon(cx, cy, z.points));
-    });
-  }
   // Decode error tracking for mid-stream fallback
   let decodeErrorCount = 0;
   // Raised from 10→50: H.265 WebCodecs decoding can produce intermittent
@@ -249,141 +224,23 @@ let webgpuRenderer: WebGPURenderer | null = null;
   }
 
   // ─── WebGL2 setup ─────────────────────────────────────────────────────
+  // (shader/quad/texture boilerplate lives in $lib/webgl-renderer.ts)
 
   function initWebGL2(): boolean {
     if (!canvasEl) return false;
-
-    const ctx = canvasEl.getContext('webgl2', {
-      alpha: false,
-      antialias: false,
-      depth: false,
-      stencil: false,
-      preserveDrawingBuffer: true, // needed for freeze-frame capture
-    });
-    if (!ctx) return false;
-    gl = ctx;
-
-    // Vertex shader — full-screen quad
-    const vsSource = `#version 300 es
-      in vec2 aPosition;
-      out vec2 vTexCoord;
-      void main() {
-        // Map [-1,1] quad to [0,1] texture coords
-        vTexCoord = aPosition * 0.5 + 0.5;
-        gl_Position = vec4(aPosition, 0.0, 1.0);
-      }
-    `;
-
-    // Fragment shader — sample VideoFrame texture
-    const fsSource = `#version 300 es
-      precision mediump float;
-      in vec2 vTexCoord;
-      uniform sampler2D uTexture;
-      out vec4 fragColor;
-      void main() {
-        // Flip Y coordinate (WebGL origin is bottom-left, video is top-left)
-        fragColor = texture(uTexture, vec2(vTexCoord.x, 1.0 - vTexCoord.y));
-      }
-    `;
-
-    const vs = compileShader(gl, gl.VERTEX_SHADER, vsSource);
-    const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSource);
-    if (!vs || !fs) return false;
-
-    const program = gl.createProgram()!;
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      if (import.meta.env.DEV) console.warn('WebGL2 program link failed:', gl.getProgramInfoLog(program));
-      return false;
-    }
-    glProgram = program;
-
-    // Full-screen quad (two triangles)
-    const vertices = new Float32Array([
-      -1, -1,
-       1, -1,
-      -1,  1,
-      -1,  1,
-       1, -1,
-       1,  1,
-    ]);
-
-    const vao = gl.createVertexArray()!;
-    glVao = vao;
-    gl.bindVertexArray(vao);
-
-    const vbo = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-
-    const aPos = gl.getAttribLocation(program, 'aPosition');
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-
-    // Texture for VideoFrame
-    glTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, glTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-    gl.bindVertexArray(null);
-
-    return true;
-  }
-
-  function compileShader(
-    glCtx: WebGL2RenderingContext,
-    type: number,
-    source: string,
-  ): WebGLShader | null {
-    const shader = glCtx.createShader(type);
-    if (!shader) return null;
-    glCtx.shaderSource(shader, source);
-    glCtx.compileShader(shader);
-    if (!glCtx.getShaderParameter(shader, glCtx.COMPILE_STATUS)) {
-      if (import.meta.env.DEV) console.warn('WebGL2 shader compile failed:', gl.getShaderInfoLog(shader));
-      glCtx.deleteShader(shader);
-      return null;
-    }
-    return shader;
+    return webglRenderer.init(canvasEl);
   }
 
   function renderFrame(frame: VideoFrame) {
-    if (!gl || !glProgram || !glTexture || !glVao || !canvasEl) return;
-
-    // Resize canvas to match frame if needed
-    if (canvasEl.width !== frame.displayWidth || canvasEl.height !== frame.displayHeight) {
-      canvasEl.width = frame.displayWidth;
-      canvasEl.height = frame.displayHeight;
-      canvasWidth = frame.displayWidth;
-      canvasHeight = frame.displayHeight;
-      gl.viewport(0, 0, canvasEl.width, canvasEl.height);
-    }
-
-    gl.useProgram(glProgram);
-
-    // Upload VideoFrame directly to texture — WebGL2 supports VideoFrame in texImage2D
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, glTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-
-    // Draw full-screen quad
-    gl.bindVertexArray(glVao);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    gl.bindVertexArray(null);
+    if (!canvasEl) return;
+    webglRenderer.renderFrame(canvasEl, frame, (w, h) => {
+      canvasWidth = w;
+      canvasHeight = h;
+    });
   }
 
   function cleanupWebGL2() {
-    if (gl) {
-      if (glTexture) { gl.deleteTexture(glTexture); glTexture = null; }
-      if (glProgram) { gl.deleteProgram(glProgram); glProgram = null; }
-      if (glVao) { gl.deleteVertexArray(glVao); glVao = null; }
-      gl = null;
-    }
+    webglRenderer.cleanup();
   }
 
   /**
@@ -422,23 +279,13 @@ let webgpuRenderer: WebGPURenderer | null = null;
 
     // Blit onto the main canvas. Prefer its 2D context; if a WebGL2 context
     // owns the canvas, upload the offscreen canvas as a texture instead.
-    if (canvasEl.width !== frame.width || canvasEl.height !== frame.height) {
-      canvasEl.width = frame.width;
-      canvasEl.height = frame.height;
-      if (gl) gl.viewport(0, 0, canvasEl.width, canvasEl.height);
-    }
+    webglRenderer.renderCanvasSource(canvasEl, wasm2dCanvas, frame.width, frame.height, (w, h) => {
+      canvasWidth = w;
+      canvasHeight = h;
+    });
     const main2d = canvasEl.getContext('2d');
     if (main2d) {
       main2d.drawImage(wasm2dCanvas, 0, 0);
-    } else if (gl && glProgram && glTexture && glVao) {
-      // WebGL2 path — reuse the existing program/texture to draw the frame.
-      gl.useProgram(glProgram);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, glTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, wasm2dCanvas);
-      gl.bindVertexArray(glVao);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
-      gl.bindVertexArray(null);
     }
   }
 

@@ -25,15 +25,22 @@
     fetchRecordingFrameBatch,
     recordTimelineSeek,
     repairRecording,
-    appendAuthToken,
-    API_BASE,
   } from '$lib/api';
-  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight, Wrench } from 'lucide-svelte';
+  import { AlertTriangle, HelpCircle, SkipForward, Loader2 } from 'lucide-svelte';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
-  import AudioWaveform from '$lib/components/AudioWaveform.svelte';
   import MjpegSequencePlayer from '$lib/components/MjpegSequencePlayer.svelte';
   import { parseVodPlaylist, entryAt, nearestEntryByWallClock, mediaTimeFor, type VodEntry } from '$lib/vod-playlist';
   import { parseTimelineMap, wallToFileSec, fileToWallSec } from '$lib/timeline-map';
+  import {
+    frameIndexAtOffset,
+    cyclerOffsetSec,
+    formatFrameTimestamp,
+    timelineDate,
+  } from '$lib/playback-frame-utils';
+  import TimelapseControls from '$lib/components/recordings/TimelapseControls.svelte';
+  import VideoErrorOverlay from '$lib/components/recordings/VideoErrorOverlay.svelte';
+  import InlineMergeControls from '$lib/components/recordings/InlineMergeControls.svelte';
+  import AudioPlayback from '$lib/components/recordings/AudioPlayback.svelte';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
   import AviPlayback from '$lib/components/AviPlayback.svelte';
   import TimelineBar from '$lib/components/TimelineBar.svelte';
@@ -80,7 +87,6 @@
     oncrosssegment,
   } = $props();
 
-  let audioRecEl = $state<HTMLAudioElement | undefined>(undefined);
   let mjpegPlayer: MjpegPlayer | undefined = $state();
 
   // --- Video player state (H.264 / H.265) ---
@@ -669,11 +675,6 @@
     onended();
   }
 
-  function timelineDate(): string {
-    if (!recording || !recording.started_at) return new Date().toLocaleDateString('en-CA');
-    return new Date(recording.started_at).toLocaleDateString('en-CA');
-  }
-
   async function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
     if (!recording) return;
     // Continuous mode: every target maps into the single media timeline —
@@ -984,7 +985,7 @@
       if (timelapseFrames.length > 0 && pendingTimelineSeekOffset != null) {
         // Cross-segment timeline seek: land on the frame nearest the
         // requested offset instead of the segment start.
-        const target = frameIndexAtOffset(pendingTimelineSeekOffset);
+        const target = frameIndexAtOffset(timelapseFrames, recording, pendingTimelineSeekOffset);
         pendingTimelineSeekOffset = null;
         tlSeek(target);
       }
@@ -1131,36 +1132,6 @@
   // Maps the whole day's TimelineBar onto cycler frames: any click anywhere
   // in the day lands on the nearest frame (same "scrub anywhere" UX as the
   // H.264 continuous timeline), and cross-segment clicks switch in place.
-  function frameIndexAtOffset(offsetSec: number): number {
-    if (timelapseFrames.length === 0 || !recording) return 0;
-    const start = Date.parse(recording.started_at);
-    if (Number.isFinite(start) && timelapseFrames[0]?.timestamp) {
-      const targetMs = start + Math.max(0, offsetSec) * 1000;
-      for (let i = 0; i < timelapseFrames.length; i++) {
-        const ts = Date.parse(timelapseFrames[i].timestamp);
-        if (!Number.isNaN(ts) && ts >= targetMs) return i;
-      }
-      return timelapseFrames.length - 1;
-    }
-    const dur = recording.duration || 0;
-    if (dur > 0) {
-      return Math.min(timelapseFrames.length - 1, Math.floor((Math.max(0, offsetSec) / dur) * timelapseFrames.length));
-    }
-    return 0;
-  }
-
-  function cyclerOffsetSec(): number {
-    const f = timelapseFrames[tlCurrentFrame];
-    if (!recording || !f) return 0;
-    if (f.timestamp) {
-      const start = Date.parse(recording.started_at);
-      const d = Date.parse(f.timestamp) - start;
-      if (Number.isFinite(d) && Number.isFinite(start)) return Math.max(0, d / 1000);
-    }
-    const total = timelapseFrames.length || 1;
-    return (tlCurrentFrame / total) * (recording.duration || 0);
-  }
-
   function handleCyclerTimelineSeek(recordingId: string, offsetSeconds: number) {
     if (!recording) return;
     const isSegmentSwitch = recordingId !== currentId;
@@ -1169,30 +1140,8 @@
       pendingTimelineSeekOffset = offsetSeconds;
       ontimelineseek(recordingId, offsetSeconds);
     } else {
-      tlSeek(frameIndexAtOffset(offsetSeconds));
+      tlSeek(frameIndexAtOffset(timelapseFrames, recording, offsetSeconds));
     }
-  }
-
-  function getFrameTimestamp(): string {
-    if (!recording || !timelapseFrames[tlCurrentFrame]) return '';
-    const start = new Date(recording.started_at).getTime();
-    const frame = timelapseFrames[tlCurrentFrame];
-    if (frame.timestamp) {
-      const ts = new Date(frame.timestamp).getTime();
-      const diff = Math.max(0, ts - start);
-      const totalSec = Math.floor(diff / 1000);
-      const h = Math.floor(totalSec / 3600);
-      const m = Math.floor((totalSec % 3600) / 60);
-      const s = totalSec % 60;
-      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    }
-    const totalFrames = timelapseFrames.length;
-    const durationMs = recording.duration * 1000;
-    const estimatedSec = Math.floor((tlCurrentFrame / Math.max(1, totalFrames)) * (durationMs / 1000));
-    const h = Math.floor(estimatedSec / 3600);
-    const m = Math.floor((estimatedSec % 3600) / 60);
-    const s = estimatedSec % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }
 
   // Cleanup on destroy: abort in-flight requests, clear timers.
@@ -1283,48 +1232,19 @@
         <div class="absolute inset-0 skeleton-shimmer" style="border-radius: var(--radius-md) var(--radius-md) 0 0;"></div>
       {/if}
       {#if videoError}
-        <div class="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20 p-6">
-          <AlertTriangle size={48} class="th-color-danger mb-3" />
-          <p class="text-white text-center text-sm mb-4">{videoErrorMsg}</p>
-          {#if videoError === 'src_not_supported' && recording?.format === 'h265'}
-            {#if transcodeForPlayback}
-              <div class="flex items-center gap-2 text-white/80 mb-3">
-                <Loader2 size={16} class="animate-spin" />
-                <span class="text-sm">{t('detail.transcodingForPlayback')}</span>
-              </div>
-            {:else}
-              <button onclick={startTranscodeForPlayback} class="btn btn-primary btn-sm flex items-center gap-1 mb-3">
-                <RefreshCw size={14} />
-                {t('detail.transcodeToH264')}
-              </button>
-            {/if}
-            {#if transcodeForPlaybackError}
-              <p class="text-red-400 text-xs mb-3">{transcodeForPlaybackError}</p>
-            {/if}
-          {/if}
-          {#if videoRetryCount < MAX_VIDEO_RETRIES}
-            <button onclick={handleVideoRetry} class="btn btn-primary btn-sm flex items-center gap-1">
-              <RefreshCw size={14} />
-              {videoRetryCount > 0 ? t('detail.videoRetrying', { count: String(videoRetryCount), max: String(MAX_VIDEO_RETRIES) }) : t('common.retry')}
-            </button>
-          {:else}
-            <p class="text-white/70 text-xs mb-3">{t('detail.videoMaxRetries')}</p>
-          {/if}
-          {#if repairRunning}
-            <div class="flex items-center gap-2 text-white/80 mt-3">
-              <Loader2 size={16} class="animate-spin" />
-              <span class="text-sm">{t('detail.repairing')}</span>
-            </div>
-          {:else}
-            <button onclick={tryRepairRecording} class="btn btn-outline btn-sm flex items-center gap-1 text-white border-white/30 hover:bg-white/10 mt-3">
-              <Wrench size={14} />
-              {t('detail.tryRepair')}
-            </button>
-          {/if}
-          {#if repairNote}
-            <p class="text-white/80 text-xs text-center max-w-md mt-2">{repairNote}</p>
-          {/if}
-        </div>
+        <VideoErrorOverlay
+          errorMsg={videoErrorMsg}
+          showTranscode={videoError === 'src_not_supported' && recording?.format === 'h265'}
+          transcoding={transcodeForPlayback}
+          transcodeError={transcodeForPlaybackError}
+          retryCount={videoRetryCount}
+          maxRetries={MAX_VIDEO_RETRIES}
+          repairRunning={repairRunning}
+          repairNote={repairNote}
+          ontranscode={startTranscodeForPlayback}
+          onretry={handleVideoRetry}
+          onrepair={tryRepairRecording}
+        />
       {:else if videoStalled}
         <div class="absolute inset-0 bg-black/40 flex items-center justify-center z-20">
           <div class="flex items-center gap-2 text-white/80">
@@ -1371,7 +1291,7 @@
   {#if recording?.camera_id}
     <TimelineBar
       cameraId={recording.camera_id}
-      date={timelineDate()}
+      date={timelineDate(recording)}
       currentRecording={metaRec}
       currentVideoTime={videoCurrentTime}
       onseek={handleTimelineSeek}
@@ -1427,157 +1347,32 @@
     </div>
 
     <!-- Inline merge controls -->
-    {#if !mergeState.inProgress && canMerge}
-      <div class="th-bg-secondary px-4 py-3 border-t th-border">
-        <div class="flex items-center justify-center gap-2">
-          <button onclick={onstartmerge} class="btn btn-primary flex items-center gap-2">
-            <Play size={16} /> {t('detail.mergeAndPlay')}
-          </button>
-        </div>
-      </div>
-    {/if}
-    {#if mergeState.inProgress}
-      <div class="th-bg-secondary px-4 py-3 border-t th-border">
-        <div class="flex items-center gap-3 justify-center flex-wrap">
-          <div class="w-32 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
-            <div class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500" style="width: {mergeState.pct}%"></div>
-          </div>
-          <span class="text-xs th-text-secondary">{t('detail.mergingProgress', { percent: String(mergeState.pct) })}</span>
-          {#if mergeState.eta}
-            <span class="text-xs th-text-muted">{mergeState.eta}</span>
-          {/if}
-          <button onclick={oncancelmerge} class="btn btn-ghost btn-xs text-xs th-color-danger">
-            {t('detail.cancelMerge')}
-          </button>
-        </div>
-      </div>
-    {/if}
-    {#if mergeState.error}
-      <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
-        <div class="flex items-center gap-3 justify-center">
-          <span class="text-xs th-color-danger">{t('detail.mergeFailed', { error: mergeState.error })}</span>
-          <button onclick={onstartmerge} class="btn btn-secondary btn-sm">{t('detail.mergeRetry')}</button>
-        </div>
-      </div>
-    {/if}
+    <InlineMergeControls mergeState={mergeState} canMerge={canMerge} onstart={onstartmerge} oncancel={oncancelmerge} />
 
     <!-- Controls -->
-    <div class="th-bg-secondary px-4 py-3 space-y-2">
-      <div
-        class="relative h-2 th-bg-tertiary rounded cursor-pointer group"
-        role="slider"
-        tabindex="0"
-        aria-label={t('detail.frameCounter', { current: String(tlCurrentFrame + 1), total: String(timelapseFrames.length) })}
-        aria-valuenow={tlCurrentFrame}
-        aria-valuemin={0}
-        aria-valuemax={timelapseFrames.length - 1}
-        onclick={(e) => {
-          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          const ratio = (e.clientX - rect.left) / rect.width;
-          tlSeek(Math.round(ratio * (timelapseFrames.length - 1)));
-        }}
-        onkeydown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); }
-          else if (e.key === 'ArrowLeft') { e.preventDefault(); tlSeek(tlCurrentFrame - 1); }
-          else if (e.key === 'ArrowRight') { e.preventDefault(); tlSeek(tlCurrentFrame + 1); }
-        }}
-      >
-        <div
-          class="absolute top-0 left-0 h-full th-bg-accent rounded group-hover:th-bg-info transition-colors"
-          style="width: {timelapseFrames.length > 1 ? (tlCurrentFrame / (timelapseFrames.length - 1)) * 100 : 100}%"
-        ></div>
-        <div
-          class="absolute top-1/2 -translate-y-1/2 w-3 h-3 th-bg-info rounded-full shadow group-hover:th-bg-accent transition-colors"
-          style="left: calc({timelapseFrames.length > 1 ? (tlCurrentFrame / (timelapseFrames.length - 1)) * 100 : 100}% - 6px)"
-        ></div>
-      </div>
-
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <button
-            onclick={() => tlSeek(tlCurrentFrame - 1)}
-            disabled={tlCurrentFrame === 0 || tlIsPlaying}
-            class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
-            style="color: {tlCurrentFrame === 0 || tlIsPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {tlCurrentFrame === 0 || tlIsPlaying ? 'transparent' : 'var(--bg-tertiary)'}"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            onclick={tlTogglePlay}
-            class="px-4 py-1.5 rounded text-sm font-medium text-white transition-colors flex items-center gap-1"
-            style="background-color: {tlIsPlaying ? 'var(--color-danger)' : 'var(--color-info)'}"
-          >
-            {#if tlIsPlaying}
-              <Pause size={14} /> {t('detail.pause')}
-            {:else}
-              <Play size={14} /> {t('detail.play')}
-            {/if}
-          </button>
-          <button
-            onclick={() => tlSeek(tlCurrentFrame + 1)}
-            disabled={tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying}
-            class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
-            style="color: {tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying ? 'transparent' : 'var(--bg-tertiary)'}"
-          >
-            <ChevronRight size={16} />
-          </button>
-        </div>
-
-        <div class="flex items-center gap-3">
-          {#if recording?.format === 'avi'}
-            <button
-              onclick={() => (aviLegacyMode = true)}
-              class="px-2 py-1 rounded text-xs font-medium th-bg-tertiary th-text-secondary"
-              title={t('detail.aviRealtimeTitle')}>
-              {t('detail.aviRealtime')}
-            </button>
-          {/if}
-          <span class="th-text-secondary text-sm font-mono">
-            {tlCurrentFrame + 1} / {timelapseFrames.length}
-          </span>
-          <span class="th-text-tertiary text-xs font-mono">
-            {getFrameTimestamp()}
-          </span>
-        </div>
-
-        <div class="flex items-center gap-1">
-          <span class="th-text-tertiary text-xs mr-1">{t('detail.speed')}</span>
-          {#each tlSpeeds as speed}
-            <button
-              onclick={() => tlSetSpeed(speed)}
-              class="px-2 py-1 rounded text-xs font-medium transition-colors"
-              style="background-color: {tlSpeed === speed ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {tlSpeed === speed ? 'white' : 'var(--text-secondary)'}"
-            >
-              {speed}x
-            </button>
-          {/each}
-        </div>
-        <div class="flex items-center gap-2">
-          <button
-            onclick={tlToggleLoop}
-            class="px-2 py-1 rounded text-xs font-medium transition-colors"
-            style="background-color: {tlLoop ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {tlLoop ? 'white' : 'var(--text-secondary)'}"
-            title="Loop playback"
-          >
-            🔁 Loop
-          </button>
-          <button
-            onclick={toggleFullscreen}
-            class="px-2 py-1 rounded text-xs font-medium transition-colors th-bg-tertiary th-text-secondary"
-            title={t('live.fullscreen')}
-          >
-            ⛶ {t('live.fullscreen')}
-          </button>
-        </div>
-      </div>
-    </div>
+    <TimelapseControls
+      frameCount={timelapseFrames.length}
+      bind:currentIndex={tlCurrentFrame}
+      bind:playing={tlIsPlaying}
+      bind:speed={tlSpeed}
+      bind:loop={tlLoop}
+      speeds={tlSpeeds}
+      timestamp={formatFrameTimestamp(timelapseFrames, recording, tlCurrentFrame)}
+      showAviToggle={recording?.format === 'avi'}
+      onseekindex={tlSeek}
+      ontoggleplay={tlTogglePlay}
+      onsetspeed={tlSetSpeed}
+      ontoggleloop={tlToggleLoop}
+      onfullscreen={toggleFullscreen}
+      onavi={() => (aviLegacyMode = true)}
+    />
 
     {#if recording?.camera_id}
       <TimelineBar
         cameraId={recording.camera_id}
-        date={timelineDate()}
+        date={timelineDate(recording)}
         currentRecording={metaRec}
-        currentVideoTime={cyclerOffsetSec()}
+        currentVideoTime={cyclerOffsetSec(timelapseFrames, recording, tlCurrentFrame)}
         onseek={handleCyclerTimelineSeek}
         showEvents={true}
       />
@@ -1622,30 +1417,7 @@
     </p>
   </div>
 {:else if playbackMode === 'audio'}
-  <!-- Audio-only recording (v43): try the server-side G.711→WAV transcode
-       first; AAC/Opus recordings get 406 from it and fall back to the raw
-       MP4 download URL (browsers play AAC-in-MP4 in <audio> natively). -->
-  <div class="flex flex-col items-center justify-center gap-4 bg-black py-16 px-4">
-    <div class="text-3xl th-text-tertiary">🎙️</div>
-    <audio
-      bind:this={audioRecEl}
-      controls
-      preload="metadata"
-      src={appendAuthToken(`${API_BASE}/recordings/${currentId}/audio.wav`)}
-      onerror={(e) => {
-        const el = e.currentTarget;
-        if (!el.src.includes('/download')) {
-          el.src = appendAuthToken(`${API_BASE}/recordings/${currentId}/download`);
-          el.load();
-        }
-      }}
-      class="w-full max-w-xl"
-    ></audio>
-    <div class="w-full max-w-xl">
-      <AudioWaveform audio={audioRecEl} label={t('common.audioWaveform')} />
-    </div>
-    <p class="text-xs th-text-muted">{t('detail.audioRecordingHint')}</p>
-  </div>
+  <AudioPlayback recordingId={currentId} />
 {:else}
   <div class="flex items-center justify-center h-64 bg-black">
     <div class="text-center th-text-tertiary">
