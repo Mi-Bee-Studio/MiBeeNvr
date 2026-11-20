@@ -61,7 +61,7 @@ func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {
 
 // Transitional shims over the moved streaming helpers — the remaining
 // in-package tests reference them; delete as those tests migrate to
-// streamsapi (documented in api-package-split.md step 3).
+// streamsapi (transitional — delete once the callers migrate).
 func getCodecParams(rec model.Recorder) (model.Format, []byte, []byte, []byte) {
 	return recorder.CodecParamsOf(rec)
 }

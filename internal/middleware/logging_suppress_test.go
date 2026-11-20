@@ -21,33 +21,33 @@ func TestLogSuppressorWindow(t *testing.T) {
 	s := newLogSuppressor(time.Minute)
 	s.now = func() time.Time { return now }
 
-	ok, sup := s.allow("/api/recordings/{id}/ai-status|404|192.168.63.110")
+	ok, sup := s.allow("/api/recordings/{id}/ai-status|404|192.168.40.110")
 	require.True(t, ok)
 	require.Zero(t, sup, "first occurrence always logs")
 
 	for range 3 {
-		ok, _ = s.allow("/api/recordings/{id}/ai-status|404|192.168.63.110")
+		ok, _ = s.allow("/api/recordings/{id}/ai-status|404|192.168.40.110")
 		require.False(t, ok, "duplicates inside the window are swallowed")
 	}
 
 	// A different key is independent (distinct shape, status, or host).
-	ok, _ = s.allow("/api/recordings/{id}|404|192.168.63.110")
+	ok, _ = s.allow("/api/recordings/{id}|404|192.168.40.110")
 	require.True(t, ok)
 	ok, _ = s.allow("/api/recordings/{id}/ai-status|404|10.0.0.9")
 	require.True(t, ok)
 
 	// Window rolls: next occurrence logs again and carries the count.
 	now = now.Add(90 * time.Second)
-	ok, sup = s.allow("/api/recordings/{id}/ai-status|404|192.168.63.110")
+	ok, sup = s.allow("/api/recordings/{id}/ai-status|404|192.168.40.110")
 	require.True(t, ok)
 	require.Equal(t, 3, sup, "swallowed count surfaces on the next logged line")
 
 	// Counts accumulate across windows until a line is actually emitted.
 	for range 2 {
-		s.allow("/api/recordings/{id}/ai-status|404|192.168.63.110")
+		s.allow("/api/recordings/{id}/ai-status|404|192.168.40.110")
 	}
 	now = now.Add(2 * time.Minute)
-	ok, sup = s.allow("/api/recordings/{id}/ai-status|404|192.168.63.110")
+	ok, sup = s.allow("/api/recordings/{id}/ai-status|404|192.168.40.110")
 	require.True(t, ok)
 	require.Equal(t, 2, sup)
 }
@@ -73,7 +73,7 @@ func TestRequestLoggerSuppressesRepeated4xx(t *testing.T) {
 
 	do := func(path string) {
 		req := httptest.NewRequest(http.MethodPatch, path, nil)
-		req.RemoteAddr = "192.168.63.110:41234"
+		req.RemoteAddr = "192.168.40.110:41234"
 		handler.ServeHTTP(httptest.NewRecorder(), req)
 	}
 

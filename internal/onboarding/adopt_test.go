@@ -61,11 +61,11 @@ func TestAdopt_StaticMode_HappyPath(t *testing.T) {
 	m.setNet = func(ctx context.Context, ip, user, pass string, dhcp bool, staticIP string, prefix int) (bool, error) {
 		setNetCalled = true
 		require.False(t, dhcp, "static mode must not send DHCP")
-		require.Equal(t, "192.168.63.77", staticIP)
+		require.Equal(t, "192.168.40.77", staticIP)
 		return false, nil
 	}
 	m.serialAt = func(ctx context.Context, ip string) string {
-		if ip == "192.168.63.77" {
+		if ip == "192.168.40.77" {
 			return "DS-SERIAL-1"
 		}
 		return ""
@@ -76,16 +76,16 @@ func TestAdopt_StaticMode_HappyPath(t *testing.T) {
 		Username: "admin",
 		Password: "pass",
 		Mode:     "static",
-		StaticIP: "192.168.63.77",
+		StaticIP: "192.168.40.77",
 	})
 	require.NoError(t, err)
 	require.True(t, setNetCalled)
 	require.Equal(t, "DS-SERIAL-1", res.Serial)
-	require.Equal(t, "192.168.63.77", res.NewIP)
+	require.Equal(t, "192.168.40.77", res.NewIP)
 	require.Equal(t, "cam-adopted-1", res.CameraID)
 	require.False(t, res.RebootNeeded)
 	require.Equal(t, "DS-SERIAL-1", en.captured.StableID, "the serial must ride as stable_id (IP self-healing binds immediately)")
-	require.Contains(t, en.captured.URL, "192.168.63.77/onvif/device_service")
+	require.Contains(t, en.captured.URL, "192.168.40.77/onvif/device_service")
 	require.Equal(t, 1, alias.upCalls, "alias bound once")
 	require.Equal(t, 1, alias.downCalls, "alias released after the flow")
 }
@@ -122,7 +122,7 @@ func TestAdopt_StaticNeverReachable_FailsAfterBudget(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
-	_, err := m.Adopt(ctx, AdoptRequest{IP: "192.168.1.64", Mode: "static", StaticIP: "192.168.63.99"})
+	_, err := m.Adopt(ctx, AdoptRequest{IP: "192.168.1.64", Mode: "static", StaticIP: "192.168.40.99"})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
 		"budget expiry must surface the ctx error, got %v", err)
@@ -135,7 +135,7 @@ func TestAdopt_StaticMode_SetNetFailure_ReleasesAlias(t *testing.T) {
 	m.setNet = func(ctx context.Context, ip, user, pass string, dhcp bool, staticIP string, prefix int) (bool, error) {
 		return false, errors.New("device 401: wrong credentials")
 	}
-	_, err := m.Adopt(context.Background(), AdoptRequest{IP: "192.168.1.64", Mode: "static", StaticIP: "192.168.63.77"})
+	_, err := m.Adopt(context.Background(), AdoptRequest{IP: "192.168.1.64", Mode: "static", StaticIP: "192.168.40.77"})
 	require.Error(t, err)
 	require.Equal(t, 1, alias.downCalls, "alias must be released even when the flow fails")
 }

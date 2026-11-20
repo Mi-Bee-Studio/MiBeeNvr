@@ -49,7 +49,7 @@ func TestEnsureGB28181CameraInheritsRecordingDefault(t *testing.T) {
 	cfg.Recording = config.RecordingConfig{DefaultEnabled: &off}
 	mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
 
-	require.NoError(t, mgr.EnsureGB28181Camera("34020000002000000001", "34020000001320000099", "", "192.168.63.99"))
+	require.NoError(t, mgr.EnsureGB28181Camera("34020000002000000001", "34020000001320000099", "", "192.168.40.99"))
 	cam := mgr.GetCameraConfig("gb-34020000001320000099")
 	require.NotNil(t, cam)
 	assert.Nil(t, cam.RecordingEnabled, "auto-enrolled channel keeps nil gate (inherits global)")

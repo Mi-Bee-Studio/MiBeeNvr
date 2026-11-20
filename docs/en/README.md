@@ -102,5 +102,4 @@
 | [Architecture Overview](architecture.md) | Package layout and data flow |
 | [Concurrency Architecture](concurrency-architecture.md) | Threading model, synchronization primitives, and the decisions behind them |
 | [WASM Player Design](wasm-player-design.md) | The in-browser H.265 player design |
-| [Storage Layer Research](storage-research.md) | Historical research doc from the v0.9.0 storage overhaul |
 | [Known Issues (deep dives)](known-issues/ai-logit-false-positives.md) | Root-cause analyses: [AI logit false positives](known-issues/ai-logit-false-positives.md) · [ONNX gzip trailer](known-issues/ai-onnx-gzip-trailer.md) · [H.265 multi-camera](known-issues/h265-multicam.md) |

@@ -49,7 +49,7 @@ func TestPathologicalDirectPair(t *testing.T) {
 		}, true},
 		{"routed cross-subnet LAN host pair (11ms) stays", StatsSnapshot{
 			ICERemoteCandidateType:    "host",
-			ICERemoteCandidateAddress: "192.168.62.41",
+			ICERemoteCandidateAddress: "192.168.40.41",
 			ICERTTSeconds:             0.011,
 		}, false},
 		{"CGNAT-space VPN overlay host pair (220ms) stays", StatsSnapshot{

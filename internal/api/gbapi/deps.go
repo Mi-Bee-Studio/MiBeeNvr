@@ -4,7 +4,7 @@
 // management (imaging/users/network/reboot), and the public snapshot-upload
 // callback.
 //
-// Extraction pattern per docs/architecture/api-package-split.md: a local Deps
+// Extraction pattern shared by the api domain packages: a local Deps
 // holding what the handlers touch, plus Register (authed group) and
 // RegisterPublic (the snapshot-upload callback, whose URL session ID is the
 // credential).

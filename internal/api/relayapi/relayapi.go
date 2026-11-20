@@ -1,7 +1,7 @@
 // Package relayapi serves the push-out relay preset and capability endpoints.
 //
 // It is the first extracted domain of internal/api (see
-// docs/architecture/api-package-split.md): the pattern every later domain
+// the same shape every later domain package follows
 // follows — a local Deps interface plus a Register function, so the parent
 // api.Handler only wires dependencies and never owns the handlers.
 package relayapi

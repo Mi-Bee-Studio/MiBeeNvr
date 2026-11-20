@@ -24,8 +24,8 @@ func TestTransientTransportErrorClassification(t *testing.T) {
 		syscall.EHOSTUNREACH,
 		syscall.ECONNREFUSED,
 		syscall.ENETDOWN,
-		errors.New("dial tcp 192.168.62.104:8080: connect: network is unreachable"),
-		errors.New("Post \"http://192.168.62.104:8080/onvif/events_service\": dial tcp: connection refused"),
+		errors.New("dial tcp 192.168.40.104:8080: connect: network is unreachable"),
+		errors.New("Post \"http://192.168.40.104:8080/onvif/events_service\": dial tcp: connection refused"),
 		errors.New("read tcp 10.0.0.2:1->10.0.0.1:8080: read: connection reset by peer"),
 		errors.New("unexpected EOF"),
 		&netTimeoutError{},
@@ -70,7 +70,7 @@ func TestSubscriberRecoversQuicklyFromConsecutiveTransientFailures(t *testing.T)
 				mu.Lock()
 				failAttempts = append(failAttempts, time.Now())
 				mu.Unlock()
-				return nil, &netOpError{msg: "dial tcp 192.168.62.104:8080: connect: network is unreachable"}
+				return nil, &netOpError{msg: "dial tcp 192.168.40.104:8080: connect: network is unreachable"}
 			}
 			if n >= 6 {
 				mu.Lock()

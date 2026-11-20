@@ -102,4 +102,3 @@ curl -u admin:password http://192.168.1.50:9090/api/storage/migrate/status
 ## Next Steps
 
 - [Adaptive Recording](adaptive-recording.md) — cut disk usage at the write-density level first
-- [Storage Research](storage-research.md) — design deep-dive of the storage subsystem
