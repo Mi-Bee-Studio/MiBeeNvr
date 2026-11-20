@@ -2,13 +2,14 @@ package recordingsapi
 
 import (
 	"encoding/binary"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"io"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 
 	"github.com/go-chi/chi/v5"
 

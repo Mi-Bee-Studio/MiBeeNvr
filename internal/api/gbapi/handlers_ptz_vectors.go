@@ -5,9 +5,6 @@ package gbapi
 // direction+speed encoding. Split out of handlers_onvif.go.
 
 import (
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
-	"time"
-
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +12,9 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mickeyzzc/gb28181-go/platform"

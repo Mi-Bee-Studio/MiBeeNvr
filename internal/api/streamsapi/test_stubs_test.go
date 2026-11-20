@@ -5,11 +5,10 @@ package streamsapi
 // so the domain tests stay hermetic after the extraction.
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"context"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -47,8 +46,10 @@ func (s *stubStreamHandler) CanHandle(codec model.Format) bool {
 	}
 	return false
 }
+
 func (s *stubStreamHandler) StartStream(string, model.Recorder, StreamStartOptions) error { return nil }
-func (s *stubStreamHandler) StopStream(string) error                                      { return nil }
+
+func (s *stubStreamHandler) StopStream(string) error { return nil }
 
 func TestStreamRegistry_H265ExcludesWebRTC(t *testing.T) {
 	t.Parallel()

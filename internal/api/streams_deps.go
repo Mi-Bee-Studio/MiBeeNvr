@@ -6,7 +6,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 )
 
@@ -41,8 +40,6 @@ type (
 	ConditionalHandler      = streamsapi.ConditionalHandler
 	ProtocolDetail          = streamsapi.ProtocolDetail
 	cameraProtocolsResponse = streamsapi.CameraProtocolsResponse
-	rtspEndpointDetail      = streamsapi.RtspEndpointDetail
-	subStreamDetail         = streamsapi.SubStreamDetail
 	HLSStreamHandler        = streamsapi.HLSStreamHandler
 	LLHLSStreamHandler      = streamsapi.LLHLSStreamHandler
 	WebRTCStreamHandler     = streamsapi.WebRTCStreamHandler
@@ -82,8 +79,4 @@ const (
 
 func setupAudioForWS(mgr *wsstream.Manager, id string, rec model.Recorder) {
 	streamsapi.SetupAudioForWS(mgr, id, rec)
-}
-
-func setupAudioForWebRTC(mgr *webrtc.Manager, id string, rec model.Recorder) {
-	streamsapi.SetupAudioForWebRTC(mgr, id, rec)
 }

@@ -3,13 +3,14 @@ package api
 import (
 	"context"
 	"encoding/binary"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
 
 	"github.com/stretchr/testify/require"
 

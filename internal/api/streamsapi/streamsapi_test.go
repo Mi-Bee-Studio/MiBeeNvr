@@ -107,7 +107,3 @@ func TestSnapshotStore_TTLAndBackdate(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, time.Since(c.timestamp) > LatestFrameCacheTTL, "entry must be stale now")
 }
-
-func newTestRouter() chi.Router {
-	return chi.NewRouter()
-}

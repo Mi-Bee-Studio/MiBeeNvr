@@ -27,9 +27,6 @@ func webhookSign(secret string, ts int64, body []byte) string {
 	return fmt.Sprintf("t=%d,v1=%s", ts, hex.EncodeToString(mac.Sum(nil)))
 }
 
-// webhookNow pins the "server clock" for pure verification tests.
-var webhookNow = time.Unix(1731000000, 0)
-
 // dispatchRecorder captures dispatcher invocations (thread-safe — the handler
 // may dispatch from the request goroutine, but tests must not race the read).
 type dispatchRecorder struct {

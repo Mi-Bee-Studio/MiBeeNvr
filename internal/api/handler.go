@@ -479,10 +479,6 @@ func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset
 	return httpx.ParsePagination(r, defaultLimit, maxLimit)
 }
 
-func writeAPIError(w http.ResponseWriter, status int, err error) {
-	httpx.WriteAPIError(w, status, err)
-}
-
 // validateURL checks that a URL has a valid scheme and non-empty host.
 // This is a basic sanity check — specific protocol validation is handled separately.
 func validateURL(rawURL string) bool {
@@ -497,11 +493,6 @@ func validateURL(rawURL string) bool {
 		return false
 	}
 	return true
-}
-
-// validateIP checks that a string is a valid IPv4 or IPv6 address, supporting ip:port format.
-func validateIP(ip string) bool {
-	return httpx.ValidateIP(ip)
 }
 
 // noopAuthMW is a middleware that passes all requests through (no auth).

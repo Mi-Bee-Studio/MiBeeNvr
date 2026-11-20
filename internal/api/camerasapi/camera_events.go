@@ -2,9 +2,10 @@ package camerasapi
 
 import (
 	"encoding/json"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"net/http"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/go-chi/chi/v5"

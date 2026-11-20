@@ -1,10 +1,10 @@
 package api
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"net/http"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
 )

@@ -4,9 +4,9 @@ import (
 	"encoding/binary"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
-	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"

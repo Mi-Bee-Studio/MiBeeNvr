@@ -3,10 +3,11 @@ package streamsapi
 import (
 	"errors"
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"

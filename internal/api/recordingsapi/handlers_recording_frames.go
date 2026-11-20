@@ -2,7 +2,6 @@ package recordingsapi
 
 import (
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"io"
 	"net/http"
 	"os"
@@ -10,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"

@@ -4,12 +4,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"io"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 
 	"github.com/go-chi/chi/v5"
 

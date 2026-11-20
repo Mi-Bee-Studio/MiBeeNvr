@@ -2,8 +2,9 @@ package streamsapi
 
 import (
 	"errors"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"net/http"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"

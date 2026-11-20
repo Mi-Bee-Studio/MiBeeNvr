@@ -3,9 +3,10 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"net/http"
 	"path/filepath"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"

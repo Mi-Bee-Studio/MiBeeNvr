@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"hash/crc32"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"

@@ -2,11 +2,12 @@ package api
 
 import (
 	"encoding/json"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )

@@ -1,10 +1,11 @@
 package streamsapi
 
 import (
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"net/http"
 	"strings"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"

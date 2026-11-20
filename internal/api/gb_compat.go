@@ -55,10 +55,6 @@ func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 	gbapi.Handle(gbDeps(h), "handleChannelRecords")(w, r)
 }
 
-func (h *Handler) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Request) {
-	gbapi.Handle(gbDeps(h), "handleChannelPlaybackStart")(w, r)
-}
-
 func (h *Handler) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Request) {
 	gbapi.Handle(gbDeps(h), "handleChannelPlaybackStatus")(w, r)
 }
@@ -69,10 +65,6 @@ func (h *Handler) handleChannelPlaybackStop(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Request) {
 	gbapi.Handle(gbDeps(h), "handleChannelPlaybackControl")(w, r)
-}
-
-func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
-	gbapi.Handle(gbDeps(h), "handleGB28181TalkWS")(w, r)
 }
 
 func (h *Handler) handleGB28181TalkStatus(w http.ResponseWriter, r *http.Request) {

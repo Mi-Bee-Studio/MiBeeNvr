@@ -5,8 +5,9 @@ package gbapi
 // route registration for the GB28181 endpoints. Split out of handler.go.
 
 import (
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/mickeyzzc/gb28181-go/manscdp"

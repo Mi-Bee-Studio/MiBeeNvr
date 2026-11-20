@@ -50,17 +50,6 @@ func xiaomiAudioEnv(t *testing.T, rec model.Recorder, cameraID string) http.Hand
 	return h.Routes()
 }
 
-func newXiaomiRecorderWithMock(t *testing.T) (*xiaomi.XiaomiRecorder, *testMISSConn) {
-	t.Helper()
-	db, store := setupTestDB(t)
-	t.Cleanup(func() { db.Close() })
-	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{CameraID: "xiaomi-cam", DID: "12345"}, store)
-	conn := newTestMISSConn()
-	conn.protocol = "tutk" // CS2 transport refuses two-way audio writes
-	rec.SetMISSClientForTest(xiaomi.NewTestMISSClient(conn))
-	return rec, conn
-}
-
 func TestTwoWayAudio_Guards(t *testing.T) {
 	t.Parallel()
 

@@ -3,11 +3,12 @@ package streamsapi
 import (
 	"errors"
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
