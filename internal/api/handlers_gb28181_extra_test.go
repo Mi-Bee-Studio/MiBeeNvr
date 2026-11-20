@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/go-chi/chi/v5"
 	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
@@ -40,17 +41,17 @@ func TestGB28181PlaybackControlValidation(t *testing.T) {
 
 	// Invalid JSON body.
 	w, req := gbReq(t, http.MethodPost, "/x", "ch1", "{bad json")
-	h.handleChannelPlaybackControl(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelPlaybackControl")(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// Unsupported action.
 	w, req = gbReq(t, http.MethodPost, "/x", "ch1", `{"action":"rewind"}`)
-	h.handleChannelPlaybackControl(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelPlaybackControl")(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// Valid action but no media service wired → 503.
 	w, req = gbReq(t, http.MethodPost, "/x", "ch1", `{"action":"pause"}`)
-	h.handleChannelPlaybackControl(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelPlaybackControl")(w, req)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
@@ -58,11 +59,11 @@ func TestGB28181PlaybackStatusStopNoMedia(t *testing.T) {
 	h := setupGB28181TestHandler(t)
 
 	w, req := gbReq(t, http.MethodGet, "/x", "ch1", "")
-	h.handleChannelPlaybackStatus(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelPlaybackStatus")(w, req)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 
 	w, req = gbReq(t, http.MethodPost, "/x", "ch1", "")
-	h.handleChannelPlaybackStop(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelPlaybackStop")(w, req)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
@@ -70,7 +71,7 @@ func TestGB28181TalkAndAlarmsNoMedia(t *testing.T) {
 	h := setupGB28181TestHandler(t)
 
 	w, req := gbReq(t, http.MethodGet, "/x", "cam1", "")
-	h.handleGB28181TalkStatus(w, req)
+	gbapi.Handle(gbDeps(h), "handleGB28181TalkStatus")(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 	var talk struct {
 		Active bool `json:"active"`
@@ -79,18 +80,18 @@ func TestGB28181TalkAndAlarmsNoMedia(t *testing.T) {
 	require.False(t, talk.Active)
 
 	w, req = gbReq(t, http.MethodGet, "/x", "dev1", "")
-	h.handleGB28181DeviceAlarms(w, req)
+	gbapi.Handle(gbDeps(h), "handleGB28181DeviceAlarms")(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	w, req = gbReq(t, http.MethodGet, "/x", "dev1", "")
-	h.handleGB28181DevicePositions(w, req)
+	gbapi.Handle(gbDeps(h), "handleGB28181DevicePositions")(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestGB28181CascadeStatusUnwired(t *testing.T) {
 	h := setupGB28181TestHandler(t)
 	w := httptest.NewRecorder()
-	h.handleGB28181CascadeStatus(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	gbapi.Handle(gbDeps(h), "handleGB28181CascadeStatus")(w, httptest.NewRequest(http.MethodGet, "/x", nil))
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -103,12 +104,12 @@ func TestGB28181ChannelRecordsValidation(t *testing.T) {
 
 	// Missing start/end.
 	w, req := gbReq(t, http.MethodGet, "/x", "ch1", "")
-	h.handleChannelRecords(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelRecords")(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// Bad start format.
 	w, req = gbReq(t, http.MethodGet, "/x?start=notatime&end=2026-08-27T00:00:00Z", "ch1", "")
-	h.handleChannelRecords(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelRecords")(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -117,17 +118,17 @@ func TestGB28181DeviceControlValidation(t *testing.T) {
 
 	// Bad body.
 	w, req := gbReq(t, http.MethodPost, "/x", "ch1", "{oops")
-	h.handleChannelDeviceControl(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelDeviceControl")(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// Unknown command.
 	w, req = gbReq(t, http.MethodPost, "/x", "ch1", `{"command":"party"}`)
-	h.handleChannelDeviceControl(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelDeviceControl")(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// TeleBoot without confirm is refused.
 	w, req = gbReq(t, http.MethodPost, "/x", "ch1", `{"command":"reboot"}`)
-	h.handleChannelDeviceControl(w, req)
+	gbapi.Handle(gbDeps(h), "handleChannelDeviceControl")(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code, "destructive commands require confirm")
 }
 
@@ -136,7 +137,7 @@ func TestGB28181PTZPresetHandlers(t *testing.T) {
 
 	// List: DB-backed, empty preset set.
 	w := httptest.NewRecorder()
-	h.handleGB28181PTZGetPresets(w, httptest.NewRequest(http.MethodGet, "/x", nil), "cam-gb")
+	gbapi.HandleGB28181PTZGetPresets(gbDeps(h), w, httptest.NewRequest(http.MethodGet, "/x", nil), "cam-gb")
 	require.Equal(t, http.StatusOK, w.Code)
 	var list struct {
 		Presets []struct {
@@ -148,23 +149,23 @@ func TestGB28181PTZPresetHandlers(t *testing.T) {
 
 	// Create requires a GB-bound camera (the harness has no camera manager).
 	w = httptest.NewRecorder()
-	h.handleGB28181PTZCreatePreset(w, httptest.NewRequest(http.MethodPost, "/x",
+	gbapi.HandleGB28181PTZCreatePreset(gbDeps(h), w, httptest.NewRequest(http.MethodPost, "/x",
 		bytes.NewReader([]byte(`{"name":"P1"}`))), "cam-gb")
 	require.Equal(t, http.StatusBadRequest, w.Code, "unbound camera must 400")
 
 	// Name is required.
 	w = httptest.NewRecorder()
-	h.handleGB28181PTZCreatePreset(w, httptest.NewRequest(http.MethodPost, "/x",
+	gbapi.HandleGB28181PTZCreatePreset(gbDeps(h), w, httptest.NewRequest(http.MethodPost, "/x",
 		bytes.NewReader([]byte(`{}`))), "cam-gb")
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// GoTo/Delete with an unbound camera → 400 (no GB channel).
 	w = httptest.NewRecorder()
-	h.handleGB28181PTZGoToPreset(w, httptest.NewRequest(http.MethodPost, "/x", nil), "cam-gb", "t1")
+	gbapi.HandleGB28181PTZGoToPreset(gbDeps(h), w, httptest.NewRequest(http.MethodPost, "/x", nil), "cam-gb", "t1")
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	w = httptest.NewRecorder()
-	h.handleGB28181PTZDeletePreset(w, httptest.NewRequest(http.MethodDelete, "/x", nil), "cam-gb", "t1")
+	gbapi.HandleGB28181PTZDeletePreset(gbDeps(h), w, httptest.NewRequest(http.MethodDelete, "/x", nil), "cam-gb", "t1")
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -182,7 +183,7 @@ func TestMapGB28181PTZError(t *testing.T) {
 		{errors.New("generic"), http.StatusInternalServerError},
 	} {
 		w := httptest.NewRecorder()
-		h.mapGB28181PTZError(w, tc.err)
+		gbapi.MapGB28181PTZError(gbDeps(h), w, tc.err)
 		require.Equal(t, tc.want, w.Code, "error %v", tc.err)
 	}
 }

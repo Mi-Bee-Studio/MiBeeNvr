@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
@@ -336,7 +337,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Uptime
-	resp.Uptime = formatUptime(time.Since(appStartTime))
+	resp.Uptime = systemapi.FormatUptime(time.Since(appStartTime))
 
 	// SetupRequired — true when no password is configured
 	resp.SetupRequired = h.config != nil && h.config.Auth.PasswordHash == "" && h.config.Auth.Password == ""

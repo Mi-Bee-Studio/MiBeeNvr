@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/stretchr/testify/require"
 )
@@ -125,22 +126,22 @@ func TestProcReaders(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("/proc readers are Linux-only")
 	}
-	total, idle, iowait, err := readCPURaw()
+	total, idle, iowait, err := systemapi.ReadCPURaw()
 	require.NoError(t, err)
 	require.Positive(t, total)
 	require.GreaterOrEqual(t, total, idle)
 	require.LessOrEqual(t, iowait, total)
 
-	memTotal, memAvail, err := readMemoryInfo()
+	memTotal, memAvail, err := systemapi.ReadMemoryInfo()
 	require.NoError(t, err)
 	require.Positive(t, memTotal)
 	require.Positive(t, memAvail)
 
-	sent, recv, err := readNetworkInfo()
+	sent, recv, err := systemapi.ReadNetworkInfo()
 	require.NoError(t, err)
 	// Loopback always has some traffic on a live host.
 	require.GreaterOrEqual(t, sent+recv, uint64(0))
-	require.Positive(t, readProcessRSS())
+	require.Positive(t, systemapi.ReadProcessRSS())
 }
 
 func TestFeatureToggles(t *testing.T) {
@@ -194,6 +195,6 @@ func TestFormatUptime(t *testing.T) {
 		0:                            "0s",
 	}
 	for d, want := range cases {
-		require.Equal(t, want, formatUptime(d), d.String())
+		require.Equal(t, want, systemapi.FormatUptime(d), d.String())
 	}
 }

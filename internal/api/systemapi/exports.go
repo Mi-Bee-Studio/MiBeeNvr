@@ -1,9 +1,8 @@
 package systemapi
 
-// Exported compat surface: the api root's transitional shims (documented in
-// in system_compat.go) and root-side tests call these. Each handler
-// wrapper constructs a per-call server — the route-time server in Register
-// keeps the DB-txn rate state, so only stateless paths go through here.
+// Exported surface for the api root's tests. Each handler wrapper constructs a
+// per-call server — the route-time server in Register keeps the DB-txn rate
+// state, so only stateless paths go through here.
 
 import (
 	"net/http"

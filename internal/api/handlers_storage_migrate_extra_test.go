@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/stretchr/testify/require"
 )
@@ -142,8 +143,8 @@ func TestStartStorageMigrate_AcceptsAndEnqueues(t *testing.T) {
 
 func TestHumanBytes(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "512 B", humanBytes(512))
-	require.Equal(t, "1.5 MB", humanBytes(1536*1024))
-	require.Equal(t, "2.0 GB", humanBytes(2*1024*1024*1024))
-	require.Equal(t, "0 B", humanBytes(0))
+	require.Equal(t, "512 B", systemapi.HumanBytes(512))
+	require.Equal(t, "1.5 MB", systemapi.HumanBytes(1536*1024))
+	require.Equal(t, "2.0 GB", systemapi.HumanBytes(2*1024*1024*1024))
+	require.Equal(t, "0 B", systemapi.HumanBytes(0))
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
@@ -37,7 +38,7 @@ func TestGBPTZFromVector(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dir, speed := gbPTZFromVector(tc.pan, tc.tilt, tc.zoom)
+			dir, speed := gbapi.GBPTZFromVector(tc.pan, tc.tilt, tc.zoom)
 			require.Equal(t, tc.wantDir, dir)
 			require.Equal(t, tc.wantSpeed, speed)
 		})
@@ -151,8 +152,8 @@ func TestPTZSuppressWindow_MoveVsStop(t *testing.T) {
 	select {
 	case c := <-calls:
 		require.Equal(t, "xiaomi-cam", c.cameraID)
-		require.Equal(t, ptzSuppressWindowMove, c.window)
-		require.Greater(t, c.window, ptzSuppressWindowShort, "move must suppress longer than stop (long-press guard)")
+		require.Equal(t, gbapi.PTZSuppressWindowMove, c.window)
+		require.Greater(t, c.window, gbapi.PTZSuppressWindowShort, "move must suppress longer than stop (long-press guard)")
 	case <-time.After(2 * time.Second):
 		t.Fatal("move did not fire the PTZ suppressor")
 	}
@@ -163,7 +164,7 @@ func TestPTZSuppressWindow_MoveVsStop(t *testing.T) {
 	select {
 	case c := <-calls:
 		require.Equal(t, "xiaomi-cam", c.cameraID)
-		require.Equal(t, ptzSuppressWindowShort, c.window)
+		require.Equal(t, gbapi.PTZSuppressWindowShort, c.window)
 	case <-time.After(2 * time.Second):
 		t.Fatal("stop did not fire the PTZ suppressor")
 	}

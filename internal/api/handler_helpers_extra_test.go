@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
@@ -33,9 +34,9 @@ func TestONVIFErrorMappers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			mappers := map[string]func(http.ResponseWriter, string, error){
-				"ptz":      handleONVIFPTZError,
-				"imaging":  handleONVIFImagingError,
-				"snapshot": handleONVIFSnapshotError,
+				"ptz":      gbapi.HandleONVIFPTZError,
+				"imaging":  gbapi.HandleONVIFImagingError,
+				"snapshot": gbapi.HandleONVIFSnapshotError,
 			}
 			for name, mapper := range mappers {
 				w := httptest.NewRecorder()
@@ -50,7 +51,7 @@ func TestONVIFErrorMappers(t *testing.T) {
 				dmCode = http.StatusInternalServerError
 			}
 			w := httptest.NewRecorder()
-			handleONVIFDeviceMgmtError(w, "c", tc.err)
+			gbapi.HandleONVIFDeviceMgmtError(w, "c", tc.err)
 			require.Equal(t, dmCode, w.Code, "device mgmt")
 		})
 	}
@@ -76,14 +77,14 @@ func TestGBCascadeStatus(t *testing.T) {
 
 	// Not wired: disabled payload.
 	w := httptest.NewRecorder()
-	h.handleGB28181CascadeStatus(w, nil)
+	gbapi.Handle(gbDeps(h), "handleGB28181CascadeStatus")(w, nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), `"enabled":false`)
 
 	// Wired + registered.
 	h.SetGB28181Cascade(&fakeGBCascade{online: true, since: 90 * time.Second, sinceOk: true, forwards: 2})
 	w = httptest.NewRecorder()
-	h.handleGB28181CascadeStatus(w, nil)
+	gbapi.Handle(gbDeps(h), "handleGB28181CascadeStatus")(w, nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), `"online":true`)
 	require.Contains(t, w.Body.String(), `"forwards":2`)
@@ -92,7 +93,7 @@ func TestGBCascadeStatus(t *testing.T) {
 	// Wired but never registered: no duration field.
 	h.SetGB28181Cascade(&fakeGBCascade{})
 	w = httptest.NewRecorder()
-	h.handleGB28181CascadeStatus(w, nil)
+	gbapi.Handle(gbDeps(h), "handleGB28181CascadeStatus")(w, nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotContains(t, w.Body.String(), "registered_for_seconds")
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -88,7 +89,7 @@ func TestCameraStorageRoot_SwitchAndBackgroundMigrate(t *testing.T) {
 		strings.NewReader(jsonBody(t, map[string]any{"root": target, "delete_source": true})))
 	req.SetPathValue("id", "cam-one")
 	w := httptest.NewRecorder()
-	h.handleSetCameraStorageRoot(w, req)
+	systemapi.HandleSetCameraStorageRoot(systemDeps(h), w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -156,7 +157,7 @@ func TestCameraStorageRoot_Rejections(t *testing.T) {
 		strings.NewReader(`{"root": "/somewhere/else"}`))
 	req.SetPathValue("id", "cam-one")
 	w := httptest.NewRecorder()
-	h.handleSetCameraStorageRoot(w, req)
+	systemapi.HandleSetCameraStorageRoot(systemDeps(h), w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown root status = %d, want 400", w.Code)
 	}
@@ -166,7 +167,7 @@ func TestCameraStorageRoot_Rejections(t *testing.T) {
 		strings.NewReader(`{"root": ""}`))
 	req2.SetPathValue("id", "cam-one")
 	w2 := httptest.NewRecorder()
-	h.handleSetCameraStorageRoot(w2, req2)
+	systemapi.HandleSetCameraStorageRoot(systemDeps(h), w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("clear status = %d, body = %s", w2.Code, w2.Body.String())
 	}
@@ -181,7 +182,7 @@ func TestCameraStorageRoot_Get(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/cam-one/storage-root", nil)
 	req.SetPathValue("id", "cam-one")
 	w := httptest.NewRecorder()
-	h.handleGetCameraStorageRoot(w, req)
+	systemapi.HandleGetCameraStorageRoot(systemDeps(h), w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
@@ -206,7 +207,7 @@ func TestStorageCandidates_AddRemove(t *testing.T) {
 	add := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/api/storage/candidates", strings.NewReader(body))
 		w := httptest.NewRecorder()
-		h.handleAddStorageCandidate(w, req)
+		systemapi.HandleAddStorageCandidate(systemDeps(h), w, req)
 		return w
 	}
 
@@ -219,7 +220,7 @@ func TestStorageCandidates_AddRemove(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/storage/candidates", nil)
 	w := httptest.NewRecorder()
-	h.handleStorageCandidates(w, req)
+	systemapi.HandleStorageCandidates(systemDeps(h), w, req)
 	// The response body is JSON: on Windows the native path's "\" arrives
 	// JSON-escaped as "\\", so compare against the escaped form (a raw
 	// Contains on the native path can never match there).
@@ -249,7 +250,7 @@ func TestStorageCandidates_AddRemove(t *testing.T) {
 	rm := func(q string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodDelete, "/api/storage/candidates?path="+q, nil)
 		w := httptest.NewRecorder()
-		h.handleRemoveStorageCandidate(w, req)
+		systemapi.HandleRemoveStorageCandidate(systemDeps(h), w, req)
 		return w
 	}
 	if w := rm(url.QueryEscape(oldRoot)); w.Code != http.StatusBadRequest {
@@ -279,7 +280,7 @@ func TestUpdateSettings_RootPreflightRejectsUnusableRoot(t *testing.T) {
 	body := jsonBody(t, map[string]any{"storage": map[string]string{"root_dir": filepath.Join(blocked, "root")}})
 	req := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body))
 	w := httptest.NewRecorder()
-	h.handleUpdateSettings(w, req)
+	systemapi.HandleUpdateSettings(systemDeps(h), w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
 	}
@@ -295,7 +296,7 @@ func TestUpdateSettings_RootSwitchIsHot(t *testing.T) {
 	body := jsonBody(t, map[string]any{"storage": map[string]string{"root_dir": target}})
 	req := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body))
 	w := httptest.NewRecorder()
-	h.handleUpdateSettings(w, req)
+	systemapi.HandleUpdateSettings(systemDeps(h), w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}

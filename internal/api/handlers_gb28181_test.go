@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -47,7 +48,7 @@ func TestAPI_GB28181_ListDevices_Empty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/gb28181/devices", nil)
 	w := httptest.NewRecorder()
-	h.handleListGB28181Devices(w, req)
+	gbapi.Handle(gbDeps(h), "handleListGB28181Devices")(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -92,7 +93,7 @@ func TestAPI_GB28181_ListDevices_WithLimit(t *testing.T) {
 	// Test default limit (50)
 	req := httptest.NewRequest(http.MethodGet, "/api/gb28181/devices", nil)
 	w := httptest.NewRecorder()
-	h.handleListGB28181Devices(w, req)
+	gbapi.Handle(gbDeps(h), "handleListGB28181Devices")(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -110,7 +111,7 @@ func TestAPI_GB28181_ListDevices_WithLimit(t *testing.T) {
 	// Test custom limit
 	req = httptest.NewRequest(http.MethodGet, "/api/gb28181/devices?limit=5", nil)
 	w = httptest.NewRecorder()
-	h.handleListGB28181Devices(w, req)
+	gbapi.Handle(gbDeps(h), "handleListGB28181Devices")(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -128,7 +129,7 @@ func TestAPI_GB28181_ListDevices_WithLimit(t *testing.T) {
 	// Test max limit clamp
 	req = httptest.NewRequest(http.MethodGet, "/api/gb28181/devices?limit=1000", nil)
 	w = httptest.NewRecorder()
-	h.handleListGB28181Devices(w, req)
+	gbapi.Handle(gbDeps(h), "handleListGB28181Devices")(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -163,7 +164,7 @@ func TestAPI_GB28181_ListDevices_ETag(t *testing.T) {
 	// First request - should get full response
 	req := httptest.NewRequest(http.MethodGet, "/api/gb28181/devices", nil)
 	w := httptest.NewRecorder()
-	h.handleListGB28181Devices(w, req)
+	gbapi.Handle(gbDeps(h), "handleListGB28181Devices")(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -178,7 +179,7 @@ func TestAPI_GB28181_ListDevices_ETag(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/api/gb28181/devices", nil)
 	req.Header.Set("If-None-Match", etag)
 	w = httptest.NewRecorder()
-	h.handleListGB28181Devices(w, req)
+	gbapi.Handle(gbDeps(h), "handleListGB28181Devices")(w, req)
 
 	if w.Code != http.StatusNotModified {
 		t.Fatalf("expected status 304, got %d", w.Code)
@@ -256,7 +257,7 @@ func TestAPI_GB28181_ListChannels_MissingDeviceID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/gb28181/devices//channels", nil)
 	w := httptest.NewRecorder()
-	h.handleListGB28181Channels(w, req)
+	gbapi.Handle(gbDeps(h), "handleListGB28181Channels")(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
@@ -304,7 +305,7 @@ func TestAPI_GB28181_CatalogRefresh_MissingDeviceID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/gb28181/devices//catalog-refresh", nil)
 	w := httptest.NewRecorder()
-	h.handleCatalogRefresh(w, req)
+	gbapi.Handle(gbDeps(h), "handleCatalogRefresh")(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
@@ -389,7 +390,7 @@ func TestAPI_GB28181_InviteChannel_MissingChannelID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/gb28181/channels//invite", nil)
 	w := httptest.NewRecorder()
-	h.handleInviteChannel(w, req)
+	gbapi.Handle(gbDeps(h), "handleInviteChannel")(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
@@ -413,7 +414,7 @@ func TestAPI_GB28181_ByeChannel_MissingChannelID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/gb28181/channels//bye", nil)
 	w := httptest.NewRecorder()
-	h.handleByeChannel(w, req)
+	gbapi.Handle(gbDeps(h), "handleByeChannel")(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
@@ -492,7 +493,7 @@ func TestAPI_GB28181_PTZ_MissingChannelID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/gb28181/channels//ptz", strings.NewReader(`{"direction":"up"}`))
 	w := httptest.NewRecorder()
-	h.handlePTZChannel(w, req)
+	gbapi.Handle(gbDeps(h), "handlePTZChannel")(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
