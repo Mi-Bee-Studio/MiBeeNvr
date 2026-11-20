@@ -1,0 +1,550 @@
+package camerasapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
+)
+
+// defaultAudioDeviceRetentionDays is the compliance-baseline retention for
+// audio-only source devices at creation: shorter than the video default —
+// audio monitoring is legally the more sensitive modality.
+const defaultAudioDeviceRetentionDays = 7
+
+// validateAudioLink checks an audio-device → video-camera association (v43):
+// the target must exist and be a real (non-audio) camera.
+func (s *server) validateAudioLink(ctx context.Context, selfID, targetID string) error {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return nil
+	}
+	if targetID == selfID {
+		return errors.New("audio_link_camera_id cannot reference itself")
+	}
+	if s.deps.DB == nil {
+		return nil
+	}
+	row, err := s.deps.DB.GetCamera(ctx, targetID)
+	if err != nil {
+		return fmt.Errorf("audio link lookup failed: %w", err)
+	}
+	if row == nil {
+		return fmt.Errorf("audio_link_camera_id %q does not exist", targetID)
+	}
+	if row.Encoding == string(model.FormatAudio) {
+		return fmt.Errorf("audio_link_camera_id %q is itself an audio device", targetID)
+	}
+	return nil
+}
+
+// gb28181ChannelPayload is the API shape of a camera's GB28181 binding.
+type gb28181ChannelPayload struct {
+	DeviceID     string `json:"device_id"`
+	ChannelID    string `json:"channel_id"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+}
+
+// createBodyHost extracts the host IP from a create-camera body's URL or
+// ONVIF endpoint ("" when neither carries one). Feeds the cross-protocol
+// dedup against registered GB28181 devices.
+
+// createBodyHost extracts the host IP from a create-camera body's URL or
+// ONVIF endpoint ("" when neither carries one). Feeds the cross-protocol
+// dedup against registered GB28181 devices.
+func createBodyHost(rawURL, onvifEndpoint string) string {
+	for _, raw := range []string{strings.TrimSpace(rawURL), strings.TrimSpace(onvifEndpoint)} {
+		if raw == "" {
+			continue
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			return u.Hostname()
+		}
+		if host, _, err := net.SplitHostPort(raw); err == nil && host != "" {
+			return host
+		}
+	}
+	return ""
+}
+
+func (p *gb28181ChannelPayload) toConfig() config.GB28181ChannelConfig {
+	return config.GB28181ChannelConfig{
+		DeviceID:     p.DeviceID,
+		ChannelID:    p.ChannelID,
+		Manufacturer: p.Manufacturer,
+	}
+}
+
+func (p *gb28181ChannelPayload) toConfigPtr() *config.GB28181ChannelConfig {
+	if p == nil {
+		return nil
+	}
+	cfg := p.toConfig()
+	return &cfg
+}
+
+func (s *server) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name         string `json:"name"`
+		Protocol     string `json:"protocol"`
+		URL          string `json:"url"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		Enabled      *bool  `json:"enabled"`
+		Description  string `json:"description"`
+		Location     string `json:"location"`
+		Brand        string `json:"brand"`
+		Model        string `json:"model"`
+		SerialNumber string `json:"serial_number"`
+		// Group label (v36, camera-management grouping). Empty = ungrouped.
+		Group             string `json:"group"`
+		AudioLinkCameraID string `json:"audio_link_camera_id"`
+		// RetentionDays: 0 = service default. For audio-only devices
+		// (encoding "audio") the create boundary applies the compliance
+		// default (7 days) when unset or negative.
+		RetentionDays int    `json:"retention_days"`
+		ONVIFEndpoint string `json:"onvif_endpoint"`
+		ProfileToken  string `json:"profile_token"`
+		// Sub-stream (#512): manual sub profile token + manual sub stream URL.
+		SubProfileToken string `json:"sub_profile_token"`
+		SubStreamURL    string `json:"sub_stream_url"`
+		StreamEncoding  string `json:"stream_encoding"`
+		Encoding        string `json:"encoding"`
+		// Per-camera transcoding override; nil = follow the global switch.
+		Transcoding  *config.CameraTranscodingConfig `json:"transcoding"`
+		Timelapse    *config.CameraTimelapseConfig   `json:"timelapse"`
+		Channel      string                          `json:"channel"`
+		AudioEnabled *bool                           `json:"audio_enabled"`
+		// Keep the camera's real audio track in recorded segments (default off).
+		AudioInRecordings *bool `json:"audio_in_recordings"`
+		// Dark frame filtering (nil = off; threshold nil = default).
+		DarkFrameFilterEnabled *bool `json:"dark_frame_filter_enabled"`
+		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
+		// Recording gate: false = live-only (no segments written). nil = record.
+		RecordingEnabled *bool `json:"recording_enabled"`
+		// Recording schedule: time windows outside which nothing is recorded.
+		// nil or no time ranges = 24/7.
+		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
+		// Cascade gate: false = hidden from the GB28181 cascade catalog and
+		// INVITEs refused. nil = default (exposed).
+		CascadeEnabled *bool `json:"cascade_enabled"`
+		// Cascade tier: forward the sub-stream instead of main (#512).
+		CascadeSubStream bool `json:"cascade_sub_stream"`
+		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
+		RecordingMode string `json:"recording_mode"`
+		// Recording tier (#637): ""/"single" or "tiered" (continuous sub-stream).
+		RecordingTier string `json:"recording_tier"`
+		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
+		MotionSource string `json:"motion_source"`
+		// Imaging channel (dual-spectrum): ""/"visible" or "thermal". Thermal
+		// applies the default policy (AI push skip; continuous recording
+		// recommended — the NUC shutter defeats pixel-domain motion gates).
+		ImagingType   string `json:"imaging_type"`
+		SpectrumGroup string `json:"spectrum_group"`
+		AutoTimeSync  *bool  `json:"auto_time_sync"`
+		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
+		// default) or "dir" (legacy per-frame directory).
+		MJPEGForm string `json:"mjpeg_form"`
+		// Pixgate (#636): classic-CV gate over a sampled sub-stream decode.
+		Pixgate  *config.CameraPixgateConfig     `json:"pixgate"`
+		Adaptive *config.AdaptiveRecordingConfig `json:"adaptive"`
+		// Audio trigger (#478): loudness input for adaptive recording.
+		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
+		// Push/ingest fields (SRT/RTMP)
+		StreamKey     string `json:"stream_key"`
+		SRTPassphrase string `json:"srt_passphrase"`
+		SRTStreamID   string `json:"srt_stream_id"`
+		// Push-out relay targets + retention
+		PushTargets       []config.PushTargetConfig `json:"push_targets"`
+		PushRetentionDays *int                      `json:"push_retention_days"`
+		// Vision instance routing (empty = all enabled instances).
+		VisionTargets []string `json:"vision_targets"`
+		// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
+		StableID    string   `json:"stable_id"`
+		SubnetHints []string `json:"subnet_hints"`
+		// GB28181 SIP device/channel binding (protocol "gb28181")
+		GB28181 *gb28181ChannelPayload `json:"gb28181"`
+		// AllowDuplicate opts in to adding a pull camera (onvif/rtsp/http)
+		// whose host IP already belongs to a registered GB28181 device.
+		// Default false: one camera per physical device.
+		AllowDuplicate bool `json:"allow_duplicate"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.RecordingSchedule != nil && len(body.RecordingSchedule.TimeRanges) == 0 {
+		body.RecordingSchedule = nil
+	}
+	if err := config.ValidateSchedule("recording_schedule", body.RecordingSchedule); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// vision_targets must reference existing vision instances (see update path).
+	if len(body.VisionTargets) > 0 && s.deps.Config != nil {
+		known := make(map[string]bool, len(s.deps.Config.Vision.Instances)+1)
+		for _, ins := range s.deps.Config.Vision.EffectiveInstances() {
+			known[ins.Name] = true
+		}
+		for _, name := range body.VisionTargets {
+			if !known[name] {
+				WriteError(w, http.StatusBadRequest,
+					"vision_targets references unknown vision instance: "+name)
+				return
+			}
+		}
+	}
+	if body.Name == "" {
+		WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if isGBCamera := body.Protocol == "gb28181"; isGBCamera {
+		if body.GB28181 == nil || strings.TrimSpace(body.GB28181.DeviceID) == "" || strings.TrimSpace(body.GB28181.ChannelID) == "" {
+			WriteError(w, http.StatusBadRequest, "gb28181 device_id and channel_id are required for gb28181 cameras")
+			return
+		}
+	}
+	if body.Protocol == "" {
+		WriteError(w, http.StatusBadRequest, "protocol is required")
+		return
+	}
+	if !validProtocols[body.Protocol] {
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, whip, xiaomi, timelapse, gb28181", body.Protocol))
+		return
+	}
+	// Push/ingest cameras (srt/rtmp/whip): no URL — the publisher connects to us.
+	isPush := body.Protocol == "srt" || body.Protocol == "rtmp" || body.Protocol == "whip"
+	// GB28181 cameras: no URL — identified by SIP DeviceID/ChannelID.
+	isGB28181 := body.Protocol == "gb28181"
+	// Cross-protocol dedup: a pull camera (onvif/rtsp/http) whose host IP
+	// matches a registered GB28181 device is the same physical camera — the
+	// GB28181 auto-enroll skips it symmetrically. Refuse unless the caller
+	// explicitly opts in (dual-protocol setups) with allow_duplicate.
+	if !isPush && !isGB28181 && s.deps.GBDeviceAddrs != nil {
+		if host := createBodyHost(body.URL, body.ONVIFEndpoint); host != "" {
+			conflict := ""
+			for _, d := range s.deps.GBDeviceAddrs() {
+				devHost := d.NetAddr
+				if h2, _, err := net.SplitHostPort(d.NetAddr); err == nil && h2 != "" {
+					devHost = h2
+				}
+				if devHost == host {
+					conflict = fmt.Sprintf("a GB28181 device (%s) is already connected from %s", d.ID, host)
+					break
+				}
+			}
+			// L2: dual-NIC devices register GB28181 from a different interface
+			// IP than the ONVIF endpoint. Probe the create-host's ONVIF serial
+			// and match it against cached GB28181 device fingerprints. Skipped
+			// entirely when no fingerprints exist (no dual-protocol device has
+			// ever registered) so normal setups pay no probe latency.
+			if conflict == "" && s.deps.DB != nil {
+				if fps, err := s.deps.DB.ListGB28181Fingerprints(r.Context()); err == nil && len(fps) > 0 {
+					if serial, ok := onvif.ProbeSerial(r.Context(), host); ok {
+						for _, fp := range fps {
+							if fp.Serial == serial {
+								conflict = fmt.Sprintf("a GB28181 device (%s) with the same hardware serial (%s) is already connected", fp.DeviceID, serial)
+								break
+							}
+						}
+					}
+				}
+			}
+			if conflict != "" {
+				if !body.AllowDuplicate {
+					logger.Warn("create camera refused: same physical camera already connected via GB28181", "host", host)
+					WriteError(w, http.StatusConflict, conflict+
+						" — this looks like the same physical camera. Use it as-is, remove/archive it first, or pass allow_duplicate=true to keep both")
+					return
+				}
+				logger.Info("create camera: allow_duplicate set despite GB28181 dedup match", "host", host)
+			}
+		}
+	}
+	// ONVIF cameras: accept url OR onvif_endpoint
+	if body.Protocol == "onvif" {
+		endpoint := body.ONVIFEndpoint
+		if endpoint == "" {
+			endpoint = body.URL
+		}
+		if endpoint == "" {
+			WriteError(w, http.StatusBadRequest, "url or onvif_endpoint is required for ONVIF cameras")
+			return
+		}
+		body.ONVIFEndpoint = endpoint
+		body.URL = "" // Don't store in url field for ONVIF
+		if s.deps.DB != nil {
+			existingCams, _ := s.deps.DB.ListCameras(r.Context())
+			for _, ec := range existingCams {
+				if ec.Protocol != "onvif" || ec.ONVIFEndpoint != body.ONVIFEndpoint {
+					continue
+				}
+				// One ONVIF endpoint can carry several video sources
+				// (dual-spectrum thermal + visible, multi-lens, encoders);
+				// each is its own camera, told apart by its media profile.
+				// An explicit profile_token no existing camera on this
+				// endpoint records is another channel, not a duplicate.
+				if body.ProfileToken != "" && onvifProfileTokenOf(s.deps.Config, &ec) != body.ProfileToken {
+					continue
+				}
+				WriteError(w, http.StatusConflict, "ONVIF camera with this endpoint already exists"+
+					" — to add another channel of the same device (e.g. its thermal lens), pick that channel's media profile")
+				return
+			}
+		}
+	} else if !isPush && !isGB28181 && body.URL == "" {
+		WriteError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+	// Validate URL format for cameras that have one (not ONVIF, not push, not gb28181)
+	if body.Protocol != "onvif" && !isPush && !isGB28181 && body.URL != "" && !httpx.ValidateURL(body.URL) {
+		WriteError(w, http.StatusBadRequest, "invalid URL format")
+		return
+	}
+	// Sub-stream URL must be RTSP when provided (#512).
+	if body.SubStreamURL != "" && !strings.HasPrefix(body.SubStreamURL, "rtsp://") && !strings.HasPrefix(body.SubStreamURL, "rtsps://") {
+		WriteError(w, http.StatusBadRequest, "sub_stream_url must be an rtsp:// or rtsps:// URL")
+		return
+	}
+	// 0.10.0+: combined protocol strings are no longer accepted.
+	proto := body.Protocol
+	enc := body.Encoding
+	if strings.Contains(proto, "_") {
+		WriteError(w, http.StatusBadRequest,
+			fmt.Sprintf("protocol %q: combined format is no longer supported; use separate protocol and encoding fields", proto))
+		return
+	}
+	if enc == "" {
+		switch proto {
+		case "rtsp":
+			enc = "h264"
+		case "http":
+			enc = "jpeg"
+		case "srt", "rtmp", "whip":
+			// Push cameras: encoding derived from the published stream (H.264 default).
+			enc = "h264"
+		case "gb28181":
+			// Hint only — the recorder detects the real codec from PS stream NALUs.
+			enc = "h264"
+		case "xiaomi":
+			// Hint only — the Xiaomi recorder probes H264/H265 from the MISS
+			// stream at runtime; the list/get probe backfill corrects the label
+			// for H.265 devices. Without this default the UI's deliberate
+			// encoding omission (auto-detect protocols send none) persisted an
+			// empty encoding that failed startup validation fatally (#402).
+			enc = "h264"
+		case "onvif":
+			// Auto-detect encoding from ONVIF device profiles
+			if body.StreamEncoding == "" {
+				if detected := probeONVIFEncoding(r.Context(), body.ONVIFEndpoint, body.Username, body.Password, body.ProfileToken); detected != "" {
+					body.StreamEncoding = detected
+					enc = strings.ToLower(detected)
+					logger.Info("auto-detected ONVIF encoding", "camera", body.Name, "encoding", enc)
+				}
+			} else {
+				enc = strings.ToLower(body.StreamEncoding)
+			}
+		}
+	}
+	// Guard the API write boundary with the same protocol+encoding validation
+	// the startup path enforces: an invalid combo saved here (e.g. http+h264
+	// from a non-UI client) bricks the NEXT restart with a fatal config
+	// validation error (#402 bug class).
+	if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Same H.265 transcode capability guard as the update path: refuse a
+	// per-camera target the hardware cannot serve, at the wire.
+	if body.Transcoding != nil && body.Transcoding.TargetCodec == "h265" {
+		ffmpegPath := ""
+		if s.deps.Config != nil && s.deps.Config.Transcoding.FFmpegPath != "" {
+			ffmpegPath = s.deps.Config.Transcoding.FFmpegPath
+		}
+		if caps := transcoding.ProbeHardwareCapabilities(ffmpegPath); caps.H265EncoderType == transcoding.EncoderSoftware {
+			WriteError(w, http.StatusBadRequest, "H.265 transcoding is not available on this device (no hardware encoder)")
+			return
+		}
+	}
+	// Audio-only devices (v43): the optional camera association must pass
+	// validation BEFORE the camera is created (a bad link would otherwise
+	// leave a half-configured device behind).
+	if enc == string(model.FormatAudio) {
+		if link := strings.TrimSpace(body.AudioLinkCameraID); link != "" {
+			if err := s.validateAudioLink(r.Context(), "", link); err != nil {
+				WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
+	cam := config.CameraConfig{
+		Name:                   body.Name,
+		Protocol:               proto,
+		Encoding:               enc,
+		URL:                    body.URL,
+		Username:               body.Username,
+		Password:               body.Password,
+		ONVIFEndpoint:          body.ONVIFEndpoint,
+		ProfileToken:           body.ProfileToken,
+		SubProfileToken:        body.SubProfileToken,
+		SubStreamURL:           body.SubStreamURL,
+		StreamEncoding:         body.StreamEncoding,
+		Timelapse:              body.Timelapse,
+		Channel:                body.Channel,
+		AudioEnabled:           body.AudioEnabled != nil && *body.AudioEnabled,
+		AudioInRecordings:      body.AudioInRecordings != nil && *body.AudioInRecordings,
+		Transcoding:            body.Transcoding,
+		DarkFrameFilterEnabled: body.DarkFrameFilterEnabled != nil && *body.DarkFrameFilterEnabled,
+		RecordingEnabled:       body.RecordingEnabled,
+		RecordingSchedule:      body.RecordingSchedule,
+		CascadeEnabled:         body.CascadeEnabled,
+		CascadeSubStream:       body.CascadeSubStream,
+		RecordingMode:          body.RecordingMode,
+		RecordingTier:          body.RecordingTier,
+		MotionSource:           body.MotionSource,
+		ImagingType:            body.ImagingType,
+		SpectrumGroup:          body.SpectrumGroup,
+		AutoTimeSync:           body.AutoTimeSync,
+		MJPEGForm:              body.MJPEGForm,
+		Pixgate:                body.Pixgate,
+		Adaptive:               body.Adaptive,
+		AudioTrigger:           body.AudioTrigger,
+		StreamKey:              body.StreamKey,
+		SRTPassphrase:          body.SRTPassphrase,
+		SRTStreamID:            body.SRTStreamID,
+		PushTargets:            body.PushTargets,
+		PushRetentionDays:      body.PushRetentionDays,
+		VisionTargets:          body.VisionTargets,
+		StableID:               body.StableID,
+		SubnetHints:            body.SubnetHints,
+	}
+	if body.GB28181 != nil {
+		cam.GB28181 = body.GB28181.toConfig()
+	}
+	if body.DarkFrameThreshold != nil {
+		cam.DarkFrameThreshold = *body.DarkFrameThreshold
+	}
+	// Same boundary validation as the update path (#435, #402 class), on the
+	// config that is actually persisted. The ID is assigned on add; validate
+	// under the display name so the error names the camera.
+	probe := cam
+	probe.ID = body.Name
+	if err := config.ValidateCameraRecordingMode(probe); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Reject a dirty stable_id at the API boundary so it can't be frozen as the
+	// camera's permanent identity (which would break rediscovery — see #216).
+	// An empty stable_id is allowed (ONVIF cameras auto-populate it later).
+	if strings.TrimSpace(cam.StableID) != "" && !config.IsValidStableID(cam.StableID) {
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("stable_id %q is not a valid hardware identity (must be 3–64 chars of [A-Za-z0-9:_-], not all-same-character; rejects IPs, URLs, all-zero MACs)", cam.StableID))
+		return
+	}
+
+	if s.deps.Cam == nil {
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	id, err := s.deps.Cam.AddCamera(r.Context(), cam)
+	if err != nil {
+		var cae *model.CameraAlreadyExistsError
+		if errors.As(err, &cae) {
+			httpx.WriteAPIError(w, http.StatusConflict, err)
+		} else {
+			logger.Error("failed to add camera", "camera_id", id, "error", err, "path", r.URL.Path)
+			WriteError(w, http.StatusInternalServerError, "failed to add camera")
+		}
+		return
+	}
+
+	// Notify merge scheduler if camera has timelapse config
+	if body.Timelapse != nil && body.Timelapse.MergeDuration != "" && s.deps.MergeScheduler != nil {
+		if dur, err := config.ParseMergeDuration(body.Timelapse.MergeDuration); err == nil {
+			s.deps.MergeScheduler.AddOrUpdate(id, dur)
+		}
+	}
+	// Persist DB-only metadata fields
+	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
+		if err := s.deps.DB.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
+			logger.Warn("failed to set camera metadata", "camera_id", id, "error", err)
+		}
+	}
+	// Group label (v36) — DB-only metadata.
+	if g := strings.TrimSpace(body.Group); g != "" {
+		if err := s.deps.DB.UpdateCameraGroup(r.Context(), id, g); err != nil {
+			logger.Warn("failed to set camera group", "camera_id", id, "error", err)
+		}
+	}
+	// Audio-only devices (v43): compliance retention default (7 days — audio
+	// evidence is more sensitive than video; shorter than the video default)
+	// unless explicitly provided, plus the optional camera association.
+	if enc == string(model.FormatAudio) {
+		rd := body.RetentionDays
+		if rd <= 0 {
+			rd = defaultAudioDeviceRetentionDays
+		}
+		if err := s.deps.DB.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, rd); err != nil {
+			logger.Warn("failed to set audio device metadata/retention", "camera_id", id, "error", err)
+		}
+		if link := strings.TrimSpace(body.AudioLinkCameraID); link != "" {
+			if err := s.deps.DB.UpdateCameraAudioLink(r.Context(), id, link); err != nil {
+				logger.Warn("failed to set audio link", "camera_id", id, "error", err)
+			}
+		}
+	}
+	// Persist push/ingest fields for srt/rtmp cameras.
+	if isPush {
+		if err := s.deps.DB.UpsertCameraIngest(r.Context(), id, body.StreamKey, body.SRTPassphrase, body.SRTStreamID); err != nil {
+			logger.Warn("failed to set camera ingest fields", "camera_id", id, "error", err)
+		}
+	}
+	row, _ := s.deps.DB.GetCamera(r.Context(), id)
+	if row != nil {
+		if s.deps.Cam != nil {
+			row.Status = s.deps.Cam.CameraStatus(id)
+		}
+		// Inject last_seen from DB
+		lastSeen, err := s.deps.DB.GetLastRecordingTime(r.Context(), id)
+		if err == nil {
+			row.LastSeen = lastSeen
+		}
+		// Overlay the YAML-only fields (motion_source, imaging_type, sub
+		// profile, …) so the create response reflects what was just saved
+		// instead of making callers re-GET (#297 lesson).
+		injectYAMLConfigFields(row, s.deps.Config)
+		cameraRowForAPI(row)
+		writeJSON(w, http.StatusCreated, row)
+	} else {
+		cam.ID = id
+		writeJSON(w, http.StatusCreated, cam)
+	}
+}
+
+// onvifProfileTokenOf returns the media profile an existing ONVIF camera
+// records: the yaml config value (auto-persisted on first connect, the live
+// source of truth) falling back to the DB column.
+func onvifProfileTokenOf(cfg *config.Config, row *storage.CameraRow) string {
+	if cfg != nil {
+		for i := range cfg.Cameras {
+			if cfg.Cameras[i].ID == row.ID && cfg.Cameras[i].ProfileToken != "" {
+				return cfg.Cameras[i].ProfileToken
+			}
+		}
+	}
+	return row.ProfileToken
+}

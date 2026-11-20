@@ -1,0 +1,404 @@
+package systemapi
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+)
+
+// Storage migration — per-camera, hot, background (#395 rework).
+//
+// Switching a camera's storage (or the default) is HOT: NEW segments go to
+// the new root immediately. Historical recordings move afterwards through the
+// background idle-time migrator (rate-limited copy, per-row rewrite,
+// verified source delete), so the user never waits and never restarts. The
+// only restart in the storage story is mounting a NEWLY authorized directory
+// (docker bind-mount — platform-inherent).
+
+// cleanStoragePath normalizes a user-supplied storage path: trimmed of
+// surrounding whitespace and trailing separators ("/" and "\" — the Windows
+// desktop SPA round-trips native paths). Returns ok=false for blank or
+// non-absolute paths (absolute means OS-absolute: "/…" on Unix, "C:\…" on
+// Windows — #891; a bare HasPrefix "/" check rejects every Windows path).
+func cleanStoragePath(p string) (string, bool) {
+	p = strings.TrimSpace(p)
+	p = strings.TrimRight(p, `/\`)
+	// filepath.IsAbs alone is wrong on both ends: on Windows it rejects
+	// Unix-style "/mnt/…" roots (no drive letter), and on Unix it would reject
+	// Windows drive paths. Accept either flavor everywhere — a leading "/" is
+	// absolute on any OS, and "C:\…" only passes IsAbs on Windows.
+	if p == "" || !(filepath.IsAbs(p) || strings.HasPrefix(p, "/")) {
+		return "", false
+	}
+	return p, true
+}
+
+// pathWithin reports whether child is parent itself or a descendant, by path
+// COMPONENT comparison (both separator flavors normalized) — a string
+// HasPrefix check cannot tell "/data/nvr" from "/data/nvr2", and on Windows
+// mixed "\" and "/" inputs never match a byte prefix at all (#891).
+func pathWithin(parent, child string) bool {
+	// path.Clean (not filepath.Clean): after separator normalization the
+	// comparison runs in pure-slash space — filepath.Clean would fold "/" back
+	// to "\" on Windows and the Split below would never see a separator.
+	pp := strings.Split(path.Clean(strings.ReplaceAll(parent, `\`, `/`)), `/`)
+	cp := strings.Split(path.Clean(strings.ReplaceAll(child, `\`, `/`)), `/`)
+	if len(cp) < len(pp) {
+		return false
+	}
+	for i := range pp {
+		if pp[i] != cp[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// StorageMigrator is the migrator surface the API needs (implemented by
+// *migration.Migrator; nil-tolerant for tests).
+type StorageMigrator interface {
+	Enqueue(cameraID, toRoot string, deleteSource bool) *migration.Job
+	Status() (string, []*migration.Job)
+}
+
+// validCameraRoot checks a requested camera root: it must be the default or
+// one of the platform-granted candidates, and pass a file-writability probe
+// (camera roots never host the database — no SQLite requirement).
+func (s *server) validCameraRoot(root string) (string, bool) {
+	root, ok := cleanStoragePath(root)
+	if root == "" {
+		return "", true
+	}
+	if !ok {
+		return "", false
+	}
+	if root != strings.TrimRight(s.deps.Config.Storage.RootDir, `/\`) {
+		found := false
+		for _, c := range s.deps.Config.Storage.Candidates {
+			if root == strings.TrimRight(c, `/\`) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", false
+		}
+	}
+	if err := storage.ProbeDir(root); err != nil {
+		return "", false
+	}
+	return root, true
+}
+
+// handleSetCameraStorageRoot switches ONE camera's storage (PUT
+// /api/cameras/{id}/storage-root, body {root, migrate=true, delete_source}):
+// sets the per-camera override (hot — applies at the next segment) and
+// enqueues the background migration of that camera's history.
+func (s *server) handleSetCameraStorageRoot(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil || s.deps.Store == nil {
+		WriteError(w, http.StatusInternalServerError, "storage not available")
+		return
+	}
+	cameraID := cameraIDFromRequest(r)
+	if cameraID == "" {
+		WriteError(w, http.StatusBadRequest, "camera id required")
+		return
+	}
+	var body struct {
+		Root         string `json:"root"`
+		Migrate      *bool  `json:"migrate"`
+		DeleteSource *bool  `json:"delete_source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	root, ok := s.validCameraRoot(body.Root)
+	if !ok {
+		WriteError(w, http.StatusBadRequest,
+			"root must be the default storage or one of the available candidates, and writable")
+		return
+	}
+
+	// Synchronous capacity precheck (migrator re-checks periodically too):
+	// reject a doomed switch BEFORE applying the override, so the camera is
+	// never left recording onto a target that cannot hold its history.
+	migrate := body.Migrate == nil || *body.Migrate
+	target := root
+	if target == "" {
+		target = s.deps.Store.RootDir()
+	}
+	if migrate && target != "" && s.deps.DB != nil {
+		if needed, err := s.deps.DB.SumMigratableBytes(r.Context(), cameraID, target); err == nil && needed > 0 {
+			if _, free, err := s.deps.Store.GetRootUsage(target); err == nil && int64(float64(free)*0.8) < needed {
+				WriteError(w, http.StatusBadRequest, fmt.Sprintf(
+					"insufficient space on %s: need %s, only %s free (20%% safety margin) — pick a larger storage or skip history migration",
+					target, humanBytes(needed), humanBytes(free)))
+				return
+			}
+		}
+	}
+
+	s.deps.Store.SetCameraRoot(cameraID, root)
+	if s.deps.Config.Storage.CameraRoots == nil && root != "" {
+		s.deps.Config.Storage.CameraRoots = make(map[string]string)
+	}
+	if root == "" {
+		delete(s.deps.Config.Storage.CameraRoots, cameraID)
+	} else if s.deps.Config.Storage.CameraRoots != nil {
+		s.deps.Config.Storage.CameraRoots[cameraID] = root
+	}
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+
+	// Enqueue the history migration whenever a migrate-able target exists:
+	// an explicit override OR the default (switching home migrates too).
+	resp := map[string]any{"status": "updated", "camera_id": cameraID, "storage_root": root}
+	if s.deps.MigrationMgr != nil {
+		if migrate && target != "" {
+			deleteSource := body.DeleteSource != nil && *body.DeleteSource
+			job := s.deps.MigrationMgr.Enqueue(cameraID, s.deps.Store.RootFor(cameraID), deleteSource)
+			resp["migration"] = job
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleGetCameraStorageRoot reports one camera's effective storage root and
+// its active migration job (GET /api/cameras/{id}/storage-root).
+func (s *server) handleGetCameraStorageRoot(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil || s.deps.Store == nil {
+		WriteError(w, http.StatusInternalServerError, "storage not available")
+		return
+	}
+	cameraID := cameraIDFromRequest(r)
+	resp := map[string]any{
+		"camera_id":      cameraID,
+		"override_root":  s.deps.Store.CameraRoot(cameraID),
+		"effective_root": s.deps.Store.RootFor(cameraID),
+		"default_root":   s.deps.Store.RootDir(),
+	}
+	if s.deps.MigrationMgr != nil {
+		_, jobs := s.deps.MigrationMgr.Status()
+		for _, j := range jobs {
+			if j.CameraID == cameraID && (j.State == "queued" || j.State == "running" || j.State == "paused") {
+				resp["migration"] = j
+				break
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleAddStorageCandidate adds a recording-root candidate AT RUNTIME
+// (POST /api/storage/candidates, body {path}) — adding storage must not
+// require a restart. The path must already exist as a directory (the mount
+// point of the new disk) and be writable (ProbeDir). Persisted to the config;
+// on platforms that deliver candidates via NVR_STORAGE_CANDIDATES (fnOS) the
+// env stays the boot-time truth — the response flags env_managed so the UI
+// can explain that.
+func (s *server) handleAddStorageCandidate(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
+		WriteError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	path, ok := cleanStoragePath(body.Path)
+	if !ok {
+		WriteError(w, http.StatusBadRequest, "path must be an absolute directory")
+		return
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		WriteError(w, http.StatusBadRequest, "path does not exist or is not a directory: "+path)
+		return
+	}
+	if path == strings.TrimRight(s.deps.Config.Storage.RootDir, `/\`) {
+		WriteError(w, http.StatusBadRequest, "path is already the current recording root")
+		return
+	}
+	for _, c := range s.deps.Config.Storage.Candidates {
+		if path == strings.TrimRight(c, `/\`) {
+			WriteError(w, http.StatusBadRequest, "path is already in the available storages")
+			return
+		}
+	}
+	if err := storage.ProbeDir(path); err != nil {
+		WriteError(w, http.StatusBadRequest, "directory is not writable: "+err.Error())
+		return
+	}
+	s.deps.Config.Storage.Candidates = append(s.deps.Config.Storage.Candidates, path)
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
+		// roll back the in-memory add so UI and config stay consistent
+		s.deps.Config.Storage.Candidates = s.deps.Config.Storage.Candidates[:len(s.deps.Config.Storage.Candidates)-1]
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "added", "path": path,
+		"env_managed": os.Getenv("NVR_STORAGE_CANDIDATES") != "",
+	})
+}
+
+// handleRemoveStorageCandidate drops a candidate (DELETE
+// /api/storage/candidates?path=...). Refuses while the path is in use as the
+// default root or any per-camera override.
+func (s *server) handleRemoveStorageCandidate(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
+		WriteError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	path := strings.TrimRight(strings.TrimSpace(r.URL.Query().Get("path")), "/")
+	if path == "" {
+		WriteError(w, http.StatusBadRequest, "path query parameter required")
+		return
+	}
+	if path == strings.TrimRight(s.deps.Config.Storage.RootDir, "/") {
+		WriteError(w, http.StatusBadRequest, "cannot remove the current recording root")
+		return
+	}
+	for _, root := range s.deps.Config.Storage.CameraRoots {
+		if path == strings.TrimRight(root, "/") {
+			WriteError(w, http.StatusBadRequest, "path is in use as a per-camera storage override")
+			return
+		}
+	}
+	idx := -1
+	for i, c := range s.deps.Config.Storage.Candidates {
+		if path == strings.TrimRight(c, "/") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		WriteError(w, http.StatusNotFound, "path is not an available storage")
+		return
+	}
+	s.deps.Config.Storage.Candidates = append(s.deps.Config.Storage.Candidates[:idx],
+		s.deps.Config.Storage.Candidates[idx+1:]...)
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "path": path})
+}
+
+// handleStartStorageMigrate is the batch entry (POST /api/storage/migrate,
+// body {target, delete_source}): switches the DEFAULT storage to target
+// (hot), clears per-camera overrides (everything follows the new default),
+// and enqueues a background migration per camera with history elsewhere.
+func (s *server) handleStartStorageMigrate(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil || s.deps.Store == nil || s.deps.DB == nil {
+		WriteError(w, http.StatusInternalServerError, "storage not available")
+		return
+	}
+	var body struct {
+		Target       string `json:"target"`
+		DeleteSource *bool  `json:"delete_source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	target, ok := cleanStoragePath(body.Target)
+	if !ok {
+		WriteError(w, http.StatusBadRequest, "target must be an absolute path")
+		return
+	}
+	from := s.deps.Config.Storage.RootDir
+	if target == from {
+		WriteError(w, http.StatusBadRequest, "target is already the current recording root")
+		return
+	}
+	if pathWithin(from, target) || pathWithin(target, from) {
+		WriteError(w, http.StatusBadRequest, "target must not contain (or be inside) the current recording root")
+		return
+	}
+	if err := storage.ProbeRoot(target); err != nil {
+		WriteError(w, http.StatusBadRequest, "target not usable: "+err.Error())
+		return
+	}
+
+	// Hot switch of the default; per-camera overrides are cleared so every
+	// camera follows the new default.
+	if err := s.deps.Store.SetRootDir(target); err != nil {
+		WriteError(w, http.StatusBadRequest, "cannot switch recording root: "+err.Error())
+		return
+	}
+	s.deps.Config.Storage.RootDir = target
+	s.deps.Config.Storage.CameraRoots = nil
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
+		if rerr := s.deps.Store.SetRootDir(from); rerr != nil {
+			slog.Warn("storage root rollback failed after config-save error", "error", rerr)
+		}
+		s.deps.Config.Storage.RootDir = from
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+
+	// Enqueue one background job per camera that has recordings outside the
+	// new default (DB rows decide — the authoritative backlog).
+	deleteSource := body.DeleteSource != nil && *body.DeleteSource
+	var enqueued int
+	if s.deps.MigrationMgr != nil {
+		if cams, err := s.deps.DB.ListCameraIDs(r.Context()); err == nil {
+			for _, camID := range cams {
+				recs, err := s.deps.DB.ListMigratableRecordings(r.Context(), camID, target)
+				if err != nil || len(recs) == 0 {
+					continue
+				}
+				s.deps.MigrationMgr.Enqueue(camID, target, deleteSource)
+				enqueued++
+			}
+		}
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "updated", "target": target, "jobs_enqueued": enqueued,
+	})
+}
+
+// handleStorageMigrateStatus reports the background migrator queue.
+func (s *server) handleStorageMigrateStatus(w http.ResponseWriter, r *http.Request) {
+	if s.deps.MigrationMgr == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"state": "idle", "jobs": []any{}})
+		return
+	}
+	state, jobs := s.deps.MigrationMgr.Status()
+	writeJSON(w, http.StatusOK, map[string]any{"state": state, "jobs": jobs})
+}
+
+// cameraIDFromRequest pulls the camera id from the chi URL param or, for
+// non-router callers, the X-Camera-Id header.
+func cameraIDFromRequest(r *http.Request) string {
+	if id := r.PathValue("id"); id != "" {
+		return id
+	}
+	return r.Header.Get("X-Camera-Id")
+}
+
+func humanBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/(1<<20))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}

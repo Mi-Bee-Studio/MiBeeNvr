@@ -507,3 +507,20 @@ const (
 	// other recording.
 	LayerSub = 1
 )
+
+// UnwrapDelegate returns the innermost recorder by unwrapping Delegate()
+// layers (e.g. ONVIFRecorder wrapping a concrete H264/H265 recorder).
+// Non-delegating recorders are returned unchanged. Extracted from
+// internal/api when the streaming domain moved into its own package —
+// both the streaming and camera domains introspect delegates.
+func UnwrapDelegate(rec Recorder) Recorder {
+	for {
+		if u, ok := rec.(interface{ Delegate() Recorder }); ok {
+			if d := u.Delegate(); d != nil {
+				rec = d
+				continue
+			}
+		}
+		return rec
+	}
+}

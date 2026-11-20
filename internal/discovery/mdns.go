@@ -204,7 +204,7 @@ func (m *MDNSRegistrar) readLoop(ctx context.Context) {
 				return
 			default:
 			}
-			if ne := (net.Error)(nil); errors.As(err, &ne) && ne.Timeout() {
+			if ne := net.Error(nil); errors.As(err, &ne) && ne.Timeout() {
 				continue
 			}
 			continue

@@ -10,6 +10,11 @@
   import Pagination from '../Pagination.svelte';
   import type { Recording, Camera } from '$lib/api';
   import { effectiveMotion } from '$lib/motion';
+  import {
+    motionBadgeStyle, formatLabel as getFormatLabel, formatBadgeClass as getFormatBadgeClass,
+    aiBadgeClass, aiBadgeLabel, activeTranscodeTask as isTranscodingRecording,
+    failedTranscodeTask as getFailedTranscodeTask, completedTranscodeTask as getCompletedTranscodeTask,
+  } from '$lib/library-list-helpers';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
 
   interface Props {
@@ -67,72 +72,6 @@
 
   // Motion heat (#435): map the compressed-domain activity score in [0,1] to a
   // green (calm) → red (busy) hue. -1/undefined = not analyzed → no badge.
-  function motionBadgeStyle(score: number): string {
-    const hue = Math.max(0, Math.round(120 - Math.min(1, score) * 120));
-    return `background-color: hsl(${hue} 65% 42%)`;
-  }
-
-  // --- Helpers ---
-  function getCameraName(cameraId: string): string {
-    const cam = cameras.find((c) => c.id === cameraId);
-    return cam ? cam.name : cameraId;
-  }
-
-  function getFormatLabel(recording: Recording): string {
-    switch (recording.format) {
-      case 'h264': return t('recording.format.h264');
-      case 'h265': return t('recording.format.h265');
-      case 'mjpeg': return t('recording.format.mjpeg');
-      case 'avi': return t('recording.format.avi');
-      case 'timelapse': return t('recording.format.timelapse');
-    }
-  }
-
-  function getFormatBadgeClass(recording: Recording): string {
-    if (recording.format === 'timelapse') return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300';
-    if (recording.format === 'avi') return 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300';
-    if (recording.format === 'h264' || recording.format === 'h265') return 'badge-info';
-    return 'badge-neutral';
-  }
-
-  // AI processing state badge (#671). Only meaningful states render — the
-  // field is absent for recordings the AI backend never touched.
-  function aiBadgeClass(status: string): string {
-    switch (status) {
-      case 'completed': return 'badge-success';
-      case 'processing': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse';
-      case 'failed': return 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
-      case 'skipped': return 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300';
-      default: return 'badge-neutral';
-    }
-  }
-
-  function aiBadgeLabel(status: string): string {
-    return t(`recordings.ai.${status}`);
-  }
-
-  // --- Transcoding ---
-  function isTranscodingRecording(recordingId: string): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find(
-      (t) => t.recording_id === recordingId && (t.status === 'running' || t.status === 'pending')
-    );
-  }
-
-  function getFailedTranscodeTask(recordingId: string): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find(
-      (t) => t.recording_id === recordingId && t.status === 'failed' && t.error
-    );
-  }
-
-  function getCompletedTranscodeTask(recordingId: string): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find(
-      (t) => t.recording_id === recordingId && t.status === 'completed'
-    );
-  }
-
   // --- Handlers ---
   function handleSort(field: string) {
     onsort?.(field);

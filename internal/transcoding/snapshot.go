@@ -120,7 +120,9 @@ func DecodeAUToJPEG(au [][]byte) ([]byte, error) {
 	jpeg, readErr = readBounded(stdout, kill)
 	stderrBuf, _ := io.ReadAll(io.LimitReader(stderr, 4<<10))
 	waitErr := cmd.Wait()
-	<-writeErr
+	// The decode verdict rides on readErr/waitErr; the request-body writer's
+	// error (client gone mid-prompt) is intentionally not surfaced.
+	_ = <-writeErr //nolint:staticcheck // S1005: blank receive drains the writer error (verdict rides on readErr/waitErr)
 
 	if readErr != nil {
 		return nil, fmt.Errorf("transcoding: snapshot decode: %w", readErr)

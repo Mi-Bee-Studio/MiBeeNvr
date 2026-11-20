@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/recordingsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 )
@@ -58,9 +59,9 @@ func zeroVisualDims(t *testing.T, path string) {
 	require.NoError(t, err)
 }
 
-func decodeRepairBody(t *testing.T, rr *httptest.ResponseRecorder) repairResponse {
+func decodeRepairBody(t *testing.T, rr *httptest.ResponseRecorder) recordingsapi.RepairResponse {
 	t.Helper()
-	var resp repairResponse
+	var resp recordingsapi.RepairResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	return resp
 }

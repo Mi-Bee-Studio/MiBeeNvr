@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
@@ -94,9 +97,7 @@ func TestAudioLiveWav_StreamsPCM(t *testing.T) {
 
 	// Session teardown must land in the audit ring.
 	require.Eventually(t, func() bool {
-		audioAudit.mu.Lock()
-		defer audioAudit.mu.Unlock()
-		for _, e := range audioAudit.entries {
+		for _, e := range audioaudit.Recent(200) {
 			if e.Kind == "live" && e.CameraID == "cam-mic" && e.DurationS > 0 {
 				return true
 			}
@@ -133,9 +134,9 @@ func TestAudioLiveWav_DeclaresFiniteContentLength(t *testing.T) {
 // asserts the body terminates cleanly at exactly Content-Length bytes — the
 // mid-frame truncation path included.
 func TestAudioLiveWav_EndsExactlyAtDeclaredLength(t *testing.T) {
-	orig := audioLiveWavNominalWindow
-	audioLiveWavNominalWindow = 250 * time.Millisecond // 8000*2*0.25 = 4000 bytes + 44 header
-	t.Cleanup(func() { audioLiveWavNominalWindow = orig })
+	orig := camerasapi.AudioLiveWavNominalWindow
+	camerasapi.AudioLiveWavNominalWindow = 250 * time.Millisecond // 8000*2*0.25 = 4000 bytes + 44 header
+	t.Cleanup(func() { camerasapi.AudioLiveWavNominalWindow = orig })
 
 	ar := recorder.NewAudioRecorder(recorder.AudioConfig{CameraID: "cam-mic"}, nil, nil)
 	hub := streamhub.New()
@@ -182,7 +183,7 @@ func TestAudioLiveWav_NotAudioDevice(t *testing.T) {
 
 func TestAudioAuditEndpoint(t *testing.T) {
 	h := audioLiveEnv(t, nil, "cam-x")
-	recordAudioAudit(audioAuditEntry{Kind: "wav", CameraID: "cam-x", Recording: "r1"})
+	audioaudit.Record(audioaudit.Entry{Kind: "wav", CameraID: "cam-x", Recording: "r1"})
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/recordings/audio-audit")
@@ -285,7 +286,7 @@ func TestAudioLive_Opus_Ogg(t *testing.T) {
 	for i := 22; i < 26; i++ {
 		page[i] = 0 // CRC is computed over the page with the field zeroed
 	}
-	require.Equal(t, oggCRC(page), binary.LittleEndian.Uint32(body[22:26]), "page CRC")
+	require.Equal(t, camerasapi.OggCRC(page), binary.LittleEndian.Uint32(body[22:26]), "page CRC")
 
 	// A 300-byte packet needs two lacing segments (255 + 45); find its page
 	// by scanning for a page whose lacing sums to 300.
@@ -359,7 +360,7 @@ func TestAudioLive_OpusHeaderParams(t *testing.T) {
 func TestADTS_ASCParse(t *testing.T) {
 	// ASC for AAC-LC, 48000 Hz (idx 3), stereo: AOT=2 (00010), freq idx 3
 	// (0011), ch 2 (0010); bits: 00010 0011 0010 ... = 0x11 0x90.
-	objType, fi, cc, ok := parseAudioSpecificConfig([]byte{0x11, 0x90})
+	objType, fi, cc, ok := camerasapi.ParseAudioSpecificConfig([]byte{0x11, 0x90})
 	require.True(t, ok)
 	require.Equal(t, 2, objType)
 	require.Equal(t, 3, fi)
@@ -367,11 +368,11 @@ func TestADTS_ASCParse(t *testing.T) {
 
 	// AOT 0 and reserved frequency index 13 must be rejected (all other
 	// fields kept valid so the rejection isolates the one under test).
-	_, _, _, bad := parseAudioSpecificConfig([]byte{0x01, 0x90}) // AOT 0, freq idx 3, stereo
+	_, _, _, bad := camerasapi.ParseAudioSpecificConfig([]byte{0x01, 0x90}) // AOT 0, freq idx 3, stereo
 	require.False(t, bad)
-	_, _, _, bad = parseAudioSpecificConfig([]byte{0x16, 0x90}) // AOT 2, freq idx 13 (reserved), stereo
+	_, _, _, bad = camerasapi.ParseAudioSpecificConfig([]byte{0x16, 0x90}) // AOT 2, freq idx 13 (reserved), stereo
 	require.False(t, bad)
-	_, _, _, bad = parseAudioSpecificConfig([]byte{0x11}) // truncated
+	_, _, _, bad = camerasapi.ParseAudioSpecificConfig([]byte{0x11}) // truncated
 	require.False(t, bad)
 }
 

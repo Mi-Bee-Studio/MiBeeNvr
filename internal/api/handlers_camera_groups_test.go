@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,7 +85,7 @@ func TestCameraGroupsOrderEndpoint(t *testing.T) {
 	// Overflow (201 names) must be rejected AND leave the stored order
 	// untouched — the 400 used to fall through a missing return and persist
 	// the oversized list anyway.
-	tooMany := make([]string, maxCameraGroups+1)
+	tooMany := make([]string, camerasapi.MaxCameraGroups+1)
 	for i := range tooMany {
 		tooMany[i] = fmt.Sprintf("组%03d", i)
 	}

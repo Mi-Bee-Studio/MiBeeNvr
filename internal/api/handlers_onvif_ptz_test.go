@@ -18,40 +18,6 @@ import (
 
 // --- Pure vector→protocol mappers ---
 
-func TestXiaomiPTZFromVector(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name            string
-		pan, tilt, zoom float64
-		wantDir         string
-		wantSpeed       int
-		wantErr         bool
-	}{
-		{"pan left", -0.5, 0, 0, "left", 5, false},
-		{"pan right fast", 1.0, 0, 0, "right", 10, false},
-		{"pan right slow", 0.25, 0, 0, "right", 3, false},
-		{"tiny magnitude clamps to 1", -0.05, 0, 0, "left", 1, false},
-		{"tilt up", 0, 0.6, 0, "up", 6, false},
-		{"tilt down", 0, -0.4, 0, "down", 4, false},
-		{"tilt dominates pan", 0.2, 0.9, 0, "up", 9, false},
-		{"zoom rejected", 0, 0, 0.5, "", 0, true},
-		{"zero vector stops", 0, 0, 0, "stop", 0, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			dir, speed, err := xiaomiPTZFromVector(tc.pan, tc.tilt, tc.zoom)
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, tc.wantDir, dir)
-			require.Equal(t, tc.wantSpeed, speed)
-		})
-	}
-}
-
 func TestGBPTZFromVector(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

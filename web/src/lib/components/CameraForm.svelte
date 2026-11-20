@@ -1,6 +1,6 @@
 <script lang="ts">
     import { t } from '$lib/i18n';
-  import { parseSubnetHints, profileOptionLabel, fmtSkew } from '$lib/camera-form-helpers';
+  import { parseSubnetHints, profileOptionLabel } from '$lib/camera-form-helpers';
   import RecordingPolicyFields from '$lib/components/camera-form/RecordingPolicyFields.svelte';
     import { friendlyError } from '$lib/errors';
     import { buildTranscodingPayload } from '$lib/camera-form-payload';
@@ -12,12 +12,9 @@
         updateMergeConfig,
         testConnection,
         getSettings,
-        getCameraTime,
-        syncCameraTime,
-        pointCameraAtNVR,
         getCameraProfiles,
     } from '$lib/api';
-    import type { CameraTimeStatus, DeviceProfileOption } from '$lib/api';
+    import type { DeviceProfileOption } from '$lib/api';
     import type {
         Camera,
         CreateCameraRequest,
@@ -42,6 +39,8 @@
     import PushTargetList from '$lib/components/camera-form/PushTargetList.svelte';
     import TranscodingSection from '$lib/components/camera-form/TranscodingSection.svelte';
     import OnvifDeviceSection from '$lib/components/camera-form/OnvifDeviceSection.svelte';
+  import TimeSyncSection from '$lib/components/camera-form/TimeSyncSection.svelte';
+  import AdvancedRecordingOptions, { type ScheduleRange } from '$lib/components/camera-form/AdvancedRecordingOptions.svelte';
     import { startBackfill, getUntranscodedRecordingCount } from '$lib/api/transcoding';
   interface Props {
     editingCamera: Camera | null;
@@ -138,9 +137,6 @@
   let formMotionSource = $state<'nvr' | 'camera:onvif'>('nvr');
   // Time sync (#time-sync): per-camera auto opt-in + live clock status.
   let formAutoTimeSync = $state(true);
-  let timeStatus = $state<CameraTimeStatus | null>(null);
-  let timeBusy = $state(false);
-  let timeMsg = $state('');
   let formAdaptiveCalmThreshold = $state('');
   let formAdaptiveTimelapseInterval = $state('');
   let formAdaptiveSpikeFactor = $state('');
@@ -209,29 +205,13 @@
 let formTranscodingBitrate = $state('2M');
 let formTranscodingCRF = $state(0);
   let formTranscodingWasEnabled = $state(false);
-// Dark frame filtering
+// Dark frame filtering + recording schedule state: owned by the
+// AdvancedRecordingOptions child via bindables (payload + init stay here).
+const defaultScheduleRange = (): ScheduleRange => ({ start: '06:00', end: '22:00', days: [] });
 let formDarkFrameFilterEnabled = $state(false);
 let formDarkFrameThreshold = $state(15);
-// Recording schedule: one row per time range; no days selected = every day.
-type ScheduleRange = { start: string; end: string; days: number[] };
-const defaultScheduleRange = (): ScheduleRange => ({ start: '06:00', end: '22:00', days: [] });
-// Monday-first display order; `day` is the days_of_week value (0 = Sunday).
-const SCHEDULE_WEEKDAYS = [
-    { day: 1, key: 'calendar.weekdayMon' },
-    { day: 2, key: 'calendar.weekdayTue' },
-    { day: 3, key: 'calendar.weekdayWed' },
-    { day: 4, key: 'calendar.weekdayThu' },
-    { day: 5, key: 'calendar.weekdayFri' },
-    { day: 6, key: 'calendar.weekdaySat' },
-    { day: 0, key: 'calendar.weekdaySun' },
-];
 let formRecordingScheduleEnabled = $state(false);
-let formRecordingScheduleRanges = $state<ScheduleRange[]>([defaultScheduleRange()]);
-
-function toggleScheduleDay(index: number, day: number) {
-    const range = formRecordingScheduleRanges[index];
-    range.days = range.days.includes(day) ? range.days.filter((d) => d !== day) : [...range.days, day];
-}
+let formRecordingScheduleRanges = $state<ScheduleRange[]>([{ start: '06:00', end: '22:00', days: [] }]);
 
 // Days go on each range (all or none selected = every day), never at the
 // schedule level.
@@ -435,8 +415,6 @@ let validationErrors = $state<Record<string, string>>({});
     formRecordingMode = camera.recording_mode === 'adaptive' && camera.encoding !== 'audio' ? 'adaptive' : 'continuous';
     formMotionSource = camera.motion_source === 'camera:onvif' ? 'camera:onvif' : 'nvr';
     formAutoTimeSync = camera.auto_time_sync ?? true;
-    timeStatus = null;
-    timeMsg = '';
     formAdaptiveCalmThreshold = camera.adaptive?.calm_threshold ?? '';
     formAdaptiveTimelapseInterval = camera.adaptive?.timelapse_interval ?? '';
     formAdaptiveSpikeFactor = camera.adaptive?.spike_factor ? String(camera.adaptive.spike_factor) : '';
@@ -822,56 +800,6 @@ async function performCameraSave() {
         showToast(t('cameras.cameraAdded'), 'success');
     }
 }
-
-
-  // --- Time sync actions (#time-sync) ---
-  async function refreshTimeStatus(): Promise<void> {
-    if (!editingCamera) return;
-    timeBusy = true;
-    timeMsg = '';
-    try {
-      timeStatus = await getCameraTime(editingCamera.id);
-    } catch (e) {
-      timeMsg = friendlyError(e);
-    } finally {
-      timeBusy = false;
-    }
-  }
-
-  async function syncTimeNow(): Promise<void> {
-    if (!editingCamera) return;
-    timeBusy = true;
-    timeMsg = '';
-    try {
-      const res = await syncCameraTime(editingCamera.id);
-      if (res.changed) {
-        timeMsg = t('cameras.timeSyncSynced', { values: { s: res.after_seconds.toFixed(1) } });
-      } else {
-        timeMsg = t('cameras.timeSyncNoChange');
-      }
-      await refreshTimeStatus();
-    } catch (e) {
-      timeMsg = friendlyError(e);
-    } finally {
-      timeBusy = false;
-    }
-  }
-
-  async function useNVRAsNTP(): Promise<void> {
-    if (!editingCamera) return;
-    timeBusy = true;
-    timeMsg = '';
-    try {
-      const res = await pointCameraAtNVR(editingCamera.id);
-      timeMsg = t('cameras.timeSyncNTPDone', { values: { server: res.server || 'NVR' } });
-      await refreshTimeStatus();
-    } catch (e) {
-      timeMsg = friendlyError(e);
-    } finally {
-      timeBusy = false;
-    }
-  }
-
 </script>
 <div class="card p-6 border th-border">
   <h3 class="text-lg font-semibold th-text-primary mb-4">
@@ -1030,57 +958,7 @@ async function performCameraSave() {
 
     <!-- Time sync (#time-sync): clock status + corrections; ONVIF + existing cameras only -->
     {#if formProtocol === 'onvif' && editingCamera}
-      <details class="group rounded-lg border th-border-default">
-        <summary class="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-sm font-medium">
-          {t('cameras.timeSyncTitle')}
-          {#if timeStatus?.available}
-            <span class="text-xs th-text-muted">{t('cameras.timeSyncSkew')}: {fmtSkew(timeStatus.skew_seconds)}</span>
-          {/if}
-        </summary>
-        <div class="space-y-2 px-3 pb-3">
-          <div class="flex items-center gap-2">
-            <input id="cam-auto-time-sync" type="checkbox" class="checkbox" bind:checked={formAutoTimeSync} />
-            <label for="cam-auto-time-sync" class="input-label cursor-pointer">
-              {t('cameras.timeSyncAuto')}
-            </label>
-          </div>
-          <p class="text-xs th-text-muted">{t('cameras.timeSyncAutoHint')}</p>
-
-          {#if timeStatus}
-            {#if timeStatus.available}
-              <div class="text-sm th-text-muted flex flex-wrap gap-x-4 gap-y-1">
-                <span>{t('cameras.timeSyncSkew')}: <span class="font-mono">{fmtSkew(timeStatus.skew_seconds)}</span></span>
-                {#if timeStatus.datetime_type}
-                  <span>{t('cameras.timeSyncMode')}: {timeStatus.datetime_type}</span>
-                {/if}
-                {#if timeStatus.timezone}
-                  <span>{t('cameras.timeSyncZone')}: {timeStatus.timezone}</span>
-                {/if}
-                <span>{timeStatus.sntp_enabled ? t('cameras.timeSyncSNTPOn') : t('cameras.timeSyncSNTPOff')}</span>
-              </div>
-            {:else}
-              <p class="text-sm text-amber-500">{t('cameras.timeSyncUnavailable')}{timeStatus.error ? ` (${timeStatus.error})` : ''}</p>
-            {/if}
-            {#if !timeStatus.credentials}
-              <p class="text-xs th-text-muted">{t('cameras.timeSyncNoCreds')}</p>
-            {/if}
-          {/if}
-          {#if timeMsg}
-            <p class="text-sm th-text-muted">{timeMsg}</p>
-          {/if}
-          <div class="flex flex-wrap gap-2">
-            <button type="button" class="btn btn-sm" disabled={timeBusy} onclick={refreshTimeStatus}>
-              {t('cameras.timeSyncRefresh')}
-            </button>
-            <button type="button" class="btn btn-sm" disabled={timeBusy} onclick={syncTimeNow}>
-              {t('cameras.timeSyncNow')}
-            </button>
-            <button type="button" class="btn btn-sm" disabled={timeBusy} onclick={useNVRAsNTP}>
-              {t('cameras.timeSyncNTP')}
-            </button>
-          </div>
-        </div>
-      </details>
+      <TimeSyncSection cameraId={editingCamera.id} bind:formAutoTimeSync />
     {/if}
 
     {#if editingCamera}
@@ -1135,84 +1013,12 @@ async function performCameraSave() {
     <!-- Advanced recording options (dark-frame filter + schedule) — collapsed by
          default to reduce clutter; auto-opens when either option is already on. -->
     {#if formProtocol === 'rtsp' || formProtocol === 'onvif' || formProtocol === 'http'}
-    <details class="md:col-span-2 border th-border rounded-lg" open={formDarkFrameFilterEnabled || formRecordingScheduleEnabled ? true : undefined}>
-      <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-        {t('cameras.advancedRecording')}
-      </summary>
-      <div class="px-4 pb-4 space-y-4">
-        <!-- Dark frame filtering (MJPEG/AVI cameras only) -->
-        <div class="space-y-2">
-          <div class="flex items-center gap-2">
-            <input id="cam-dark-frame" type="checkbox" class="checkbox"
-              bind:checked={formDarkFrameFilterEnabled}
-            />
-            <label for="cam-dark-frame" class="input-label cursor-pointer">
-              {t('cameras.darkFrameFilter') || 'Dark frame filter'}
-              <span class="text-xs th-text-muted ml-1">({t('cameras.darkFrameFilterHint') || 'skip night/dark segments'})</span>
-            </label>
-          </div>
-          {#if formDarkFrameFilterEnabled}
-            <div class="flex items-center gap-2 pl-6">
-              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.brightnessThreshold') || 'Brightness threshold'}</label>
-              <input type="range" min="5" max="50" bind:value={formDarkFrameThreshold} class="range range-sm w-32" />
-              <span class="text-sm font-mono w-8">{formDarkFrameThreshold}</span>
-            </div>
-          {/if}
-        </div>
-
-        <!-- Recording schedule -->
-        <div class="space-y-2">
-          <div class="flex items-center gap-2">
-            <input id="cam-rec-schedule" type="checkbox" class="checkbox"
-              bind:checked={formRecordingScheduleEnabled}
-            />
-            <label for="cam-rec-schedule" class="input-label cursor-pointer">
-              {t('cameras.recordingSchedule') || 'Recording schedule'}
-              <span class="text-xs th-text-muted ml-1">({t('cameras.recordingScheduleHint') || 'time-based recording'})</span>
-            </label>
-          </div>
-          {#if formRecordingScheduleEnabled}
-            <div class="space-y-2 pl-6">
-              {#each formRecordingScheduleRanges as range, i}
-                <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="schedule-range">
-                  <div class="flex items-center gap-2">
-                    <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
-                    <input type="time" bind:value={range.start} class="input w-28 py-1" />
-                    <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
-                    <input type="time" bind:value={range.end} class="input w-28 py-1" />
-                    {#if range.end <= range.start}
-                      <span class="text-xs th-text-muted">{t('cameras.recordingScheduleOvernight')}</span>
-                    {/if}
-                  </div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    {#each SCHEDULE_WEEKDAYS as wd}
-                      <label class="flex items-center gap-1 text-sm th-text-secondary cursor-pointer">
-                        <input type="checkbox" class="accent-[var(--color-accent)]"
-                          checked={range.days.includes(wd.day)}
-                          onchange={() => toggleScheduleDay(i, wd.day)}
-                        />
-                        {t(wd.key)}
-                      </label>
-                    {/each}
-                  </div>
-                  {#if formRecordingScheduleRanges.length > 1}
-                    <button type="button" class="text-xs th-text-danger hover:underline"
-                      onclick={() => formRecordingScheduleRanges.splice(i, 1)}>
-                      {t('common.remove')}
-                    </button>
-                  {/if}
-                </div>
-              {/each}
-              <button type="button" class="text-xs th-text-accent hover:underline"
-                onclick={() => formRecordingScheduleRanges.push(defaultScheduleRange())}>
-                + {t('cameras.recordingScheduleAddRange')}
-              </button>
-              <p class="text-xs th-text-muted">{t('cameras.recordingScheduleDaysHint')}</p>
-            </div>
-          {/if}
-        </div>
-      </div>
-    </details>
+    <AdvancedRecordingOptions
+      bind:darkFrameEnabled={formDarkFrameFilterEnabled}
+      bind:darkFrameThreshold={formDarkFrameThreshold}
+      bind:scheduleEnabled={formRecordingScheduleEnabled}
+      bind:scheduleRanges={formRecordingScheduleRanges}
+    />
     {/if}
 
     <!-- URL (hidden for push/ingest protocols — publisher connects to us; and

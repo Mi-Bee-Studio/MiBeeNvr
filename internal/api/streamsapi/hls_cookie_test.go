@@ -1,0 +1,138 @@
+package streamsapi
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/stretchr/testify/require"
+)
+
+// setStreamCookieOnPlaylist is unit-tested directly: the full handleHLSStream
+// path requires a live recorder + HLS muxer (see the M5 real-device
+// validation for the end-to-end flow).
+func TestSetStreamCookieOnPlaylist(t *testing.T) {
+	t.Parallel()
+	token, _ := middleware.SignSessionToken("admin", "$2a$10$somehash", time.Now())
+
+	mkReq := func(path string, withBearer bool) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		if withBearer {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		return r
+	}
+
+	t.Run("playlist with session token sets cookie", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, mkReq("/api/cameras/cam-1/stream/index.m3u8", true), "cam-1")
+
+		cookies := rr.Result().Cookies()
+		require.Len(t, cookies, 1)
+		c := cookies[0]
+		require.Equal(t, middleware.StreamCookieName, c.Name)
+		require.Equal(t, token, c.Value)
+		require.Equal(t, "/api/cameras/cam-1/", c.Path, "cookie scoped to the camera's subtree")
+		require.Equal(t, int(middleware.TokenTTL.Seconds()), c.MaxAge)
+		require.True(t, c.HttpOnly)
+		require.Equal(t, http.SameSiteLaxMode, c.SameSite)
+		require.False(t, c.Secure, "plain-HTTP LAN must not set Secure (cookie would be dropped)")
+	})
+
+	t.Run("segment fetch does not set cookie", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, mkReq("/api/cameras/cam-1/stream/seg-4.ts", true), "cam-1")
+		require.Empty(t, rr.Result().Cookies())
+	})
+
+	t.Run("playlist without session token (BasicAuth) sets nothing", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, mkReq("/api/cameras/cam-1/stream/index.m3u8", false), "cam-1")
+		require.Empty(t, rr.Result().Cookies())
+	})
+
+	t.Run("renewed token takes precedence", func(t *testing.T) {
+		fresh, _ := middleware.SignSessionToken("admin", "$2a$10$somehash", time.Now())
+		rr := httptest.NewRecorder()
+		rr.Header().Set(middleware.RenewedTokenHeader, fresh)
+		setStreamCookieOnPlaylist(rr, mkReq("/api/cameras/cam-1/stream/index.m3u8", true), "cam-1")
+		cookies := rr.Result().Cookies()
+		require.Len(t, cookies, 1)
+		require.Equal(t, fresh, cookies[0].Value, "cookie must carry the freshly-renewed token")
+	})
+}
+
+// API-key callers get the same stream-cookie channel as session-token callers
+// (#706): playlist authenticated with ?api_key= (or Bearer mbv_) hands the
+// player a cookie so relative segment URLs — which do NOT inherit the query
+// per RFC 3986 — can authenticate. iOS AVPlayer is the motivating client.
+func TestSetStreamCookieOnPlaylistAPIKey(t *testing.T) {
+	t.Parallel()
+
+	mkAPIKeyReq := func(path string, ctxOK bool) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, path+"?api_key=mbv_"+strings.Repeat("a", 40), nil)
+		if ctxOK {
+			r = r.WithContext(middleware.WithAPIKeyName(r.Context(), "dad-phone"))
+		}
+		return r
+	}
+
+	t.Run("api-key playlist sets cookie carrying the key", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, mkAPIKeyReq("/api/cameras/cam-1/stream/index.m3u8", true), "cam-1")
+
+		cookies := rr.Result().Cookies()
+		require.Len(t, cookies, 1)
+		c := cookies[0]
+		require.Equal(t, middleware.StreamCookieName, c.Name)
+		require.Equal(t, "mbv_"+strings.Repeat("a", 40), c.Value)
+		require.Equal(t, "/api/cameras/cam-1/", c.Path)
+		require.Equal(t, int(middleware.StreamCookieAPIKeyTTL.Seconds()), c.MaxAge,
+			"api-key cookie is session-scale, not forever")
+		require.True(t, c.HttpOnly)
+		require.Equal(t, http.SameSiteLaxMode, c.SameSite)
+	})
+
+	t.Run("api_key in URL but NOT validated must not mint a cookie", func(t *testing.T) {
+		// Echoing unvalidated key material into a cookie would persist a
+		// possibly-invalid credential beyond the single request.
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, mkAPIKeyReq("/api/cameras/cam-1/stream/index.m3u8", false), "cam-1")
+		require.Empty(t, rr.Result().Cookies())
+	})
+
+	t.Run("session token still wins over api key", func(t *testing.T) {
+		token, _ := middleware.SignSessionToken("admin", "$2a$10$somehash", time.Now())
+		r := mkAPIKeyReq("/api/cameras/cam-1/stream/index.m3u8", true)
+		r.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, r, "cam-1")
+		cookies := rr.Result().Cookies()
+		require.Len(t, cookies, 1)
+		require.Equal(t, token, cookies[0].Value)
+	})
+}
+
+// TestRewriteLegacyPlaylistName covers the #772 compatibility aliases: docs
+// through v0.12.0 advertised stream.m3u8 (never a registered muxer name);
+// playlist.m3u8 is the conventional guess. Segment/init names pass through.
+func TestRewriteLegacyPlaylistName(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ in, want string }{
+		{"/api/cameras/cam-1/stream/stream.m3u8", "/api/cameras/cam-1/stream/index.m3u8"},
+		{"/api/cameras/cam-1/stream/playlist.m3u8", "/api/cameras/cam-1/stream/index.m3u8"},
+		{"/api/cameras/cam-1/stream/sub/stream.m3u8", "/api/cameras/cam-1/stream/sub/index.m3u8"},
+		{"/api/cameras/cam-1/stream/STREAM.M3U8", "/api/cameras/cam-1/stream/index.m3u8"},
+		// Registered names and server-generated segment files: untouched.
+		{"/api/cameras/cam-1/stream/index.m3u8", "/api/cameras/cam-1/stream/index.m3u8"},
+		{"/api/cameras/cam-1/stream/abc123_video1_seg0.mp4", "/api/cameras/cam-1/stream/abc123_video1_seg0.mp4"},
+		{"/api/cameras/cam-1/stream/video1_stream.m3u8", "/api/cameras/cam-1/stream/video1_stream.m3u8"},
+		{"/api/cameras/cam-1/stream/init.mp4", "/api/cameras/cam-1/stream/init.mp4"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, rewriteLegacyPlaylistName(tc.in), "input %q", tc.in)
+	}
+}

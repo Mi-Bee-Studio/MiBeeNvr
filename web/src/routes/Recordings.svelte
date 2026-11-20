@@ -7,8 +7,6 @@
     batchDeleteRecordings,
     downloadRecording,
     batchMergeTimelapse,
-    triggerTimelapseMerge,
-    subscribeTimelapseMergeProgress,
     listTimelapseMerges,
     getRecordingDailySummary,
     getRecordingsTimeline,
@@ -18,13 +16,13 @@
   import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
-  import { remoteDayBounds, computePresetWindowStart, DAY_CACHE_TTL_MS } from '$lib/recordings-windows';
+  import { DAY_CACHE_TTL_MS } from '$lib/recordings-windows';
 
   import type { Recording, Camera, RecordingDaySummary, RecordingTimelineSegment } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { formatDate, formatFileSize, formatMergeWindowLabel, mergeDurationI18nKeys, parseServerDate } from '$lib/format';
+  import { formatDate, formatFileSize, parseServerDate } from '$lib/format';
   import { showToast } from '$lib/toast.svelte';
-  import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass, Server, Cloud, Download } from 'lucide-svelte';
+  import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Server } from 'lucide-svelte';
   import GB28181DeviceRecords from '$lib/components/GB28181DeviceRecords.svelte';
   import GB28181DeviceControl from '$lib/components/GB28181DeviceControl.svelte';
   import GB28181AlarmsPositions from '$lib/components/GB28181AlarmsPositions.svelte';
@@ -33,14 +31,16 @@
   import FormatFilter from '$lib/components/library/FormatFilter.svelte';
   import RecordingsFilterBar from '$lib/components/recordings/RecordingsFilterBar.svelte';
   import BatchActionBar from '$lib/components/recordings/BatchActionBar.svelte';
+  import RemoteArchiveSection from '$lib/components/recordings/RemoteArchiveSection.svelte';
+  import TimelapsePresetBar from '$lib/components/recordings/TimelapsePresetBar.svelte';
+  import MergeHistoryCard from '$lib/components/recordings/MergeHistoryCard.svelte';
+  import AviPlaybackModal from '$lib/components/recordings/AviPlaybackModal.svelte';
   import CompactList from '$lib/components/library/CompactList.svelte';
   import CalendarView from '$lib/components/timelapse/CalendarView.svelte';
   import AviPlayback from '$lib/components/AviPlayback.svelte';
   import DayTimeline from '$lib/components/DayTimeline.svelte';
   import type { TimelineAIEvent } from '$lib/components/DayTimeline.svelte';
   import { listAIEvents } from '../lib/api/ai-events';
-  import { listOffloadRecordings, offloadObjectURL } from '$lib/api/offload';
-  import type { OffloadRemoteItem } from '$lib/api/offload';
   import { getMiBeeVisionConnected } from '../lib/mibeevision-status.svelte';
   import { Brain } from 'lucide-svelte';
 
@@ -215,13 +215,6 @@
 
 // ── Merge tracking ──
 let prevMergeStatuses = $state<Record<string, string>>({});
-const MERGE_STORAGE_KEY = 'mibee_nvr_merge_active';
-
-function getActiveMergesFromStorage(): Record<string, { progress: number; status: string }> {
-  try {
-    return JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
-  } catch { return {}; }
-}
 
 function detectMergeChanges(recordingsList: Recording[]) {
   for (const r of recordingsList) {
@@ -249,79 +242,16 @@ function detectMergeChanges(recordingsList: Recording[]) {
 let batchMergeDuration = $state('1h');
 let batchMerging = $state(false);
 
-// ── Timelapse preset-range state ──
-// Preset buttons (Today / Last 8h / Last 24h / This week / This month) appear
-// above the Timelapse view. Clicking one either plays an existing periodic
-// merge output covering that range, or offers to generate one on demand.
-let presetGenerating = $state(false);
-let presetMergeProgress = $state(0); // 0-100, polled during generation
-let presetMergeId = $state<number | null>(null); // merge id being polled
-let presetProgressAbort: AbortController | null = null;
+// Merge-history refresh marker: flipped by the preset bar when a
+// generation completes; the MergeHistoryCard child resets it after reload.
+let mergeHistoryDirty = $state(false);
+// Camera the preset bar / history card act on (bindable child state).
+let selectedPresetCamera = $state('');
 
-// Each preset maps to a (duration_label, window_start_fn, window_end_fn) tuple.
-// window_start/end are computed relative to NOW at click time, in the user's
-// local timezone — the backend aligns them to the named window via ParseMergeDuration.
-const timelapsePresets: Array<{ key: string; labelKey: string; duration: string }> = [
-  { key: 'today', labelKey: 'timelapseMerge.presetToday', duration: 'natural-day' },
-  { key: '8h', labelKey: 'timelapseMerge.preset8h', duration: '8h' },
-  { key: '24h', labelKey: 'timelapseMerge.preset24h', duration: '24h' },
-  { key: '7d', labelKey: 'timelapseMerge.preset7d', duration: '7d' },
-  { key: '30d', labelKey: 'timelapseMerge.preset30d', duration: '30d' },
-];
-
-// selectedPresetCamera is the camera the preset buttons act on. Defaults to
-// the URL ?camera= param or the first camera in the list.
-let selectedPresetCamera = $state<string>('');
-
-// ── Merge history state ──
-// The preset buttons only reach the MOST RECENT completed merge per window
-// type (limit:1, window_start DESC) — earlier days would be unreachable
-// without this list. One row per completed merge; click plays it. Lives in a
-// collapsible card under the timeline.
-let mergeHistory = $state<TimelapseMerge[]>([]);
-let mergeHistoryLoading = $state(false);
-let mergeHistoryCamera = $state(''); // camera the loaded list belongs to
-let mergeHistoryDirty = $state(false); // a merge completed since the last load
-let historyOpen = $state(
-  (() => {
-    try { return localStorage.getItem('mibee_nvr_tl_history_open') === '1'; } catch { return false; }
-  })(),
-);
-
-function toggleHistoryOpen() {
-  historyOpen = !historyOpen;
-  try { localStorage.setItem('mibee_nvr_tl_history_open', historyOpen ? '1' : '0'); } catch {}
+function handlePresetGenerated() {
+  mergeHistoryDirty = true;
+  if (selectedDate) void loadDayMerges(selectedDate); // new top strip
 }
-
-function mergeDurationLabel(durationLabel: string): string {
-  const key = mergeDurationI18nKeys[durationLabel];
-  return key ? t(key) : durationLabel;
-}
-
-async function loadMergeHistory(cameraId: string) {
-  mergeHistoryLoading = true;
-  try {
-    const resp = await listTimelapseMerges({ camera_id: cameraId, status: 'completed', limit: 30 });
-    mergeHistory = resp.merges;
-    mergeHistoryCamera = cameraId;
-    mergeHistoryDirty = false;
-  } catch {
-    // Non-fatal: the list stays empty until the camera/view changes again.
-  } finally {
-    mergeHistoryLoading = false;
-  }
-}
-
-// Load (or refresh) the history whenever the card is opened, the preset
-// camera changes, or a preset generation just completed.
-$effect(() => {
-  if (!historyOpen) return;
-  const cameraId = selectedPresetCamera || cameras[0]?.id;
-  if (!cameraId) return;
-  if (!mergeHistoryDirty && mergeHistoryCamera === cameraId) return;
-  void loadMergeHistory(cameraId);
-});
-
 
   // ── Derived ──
   let apiFormat = $derived.by(() => {
@@ -342,10 +272,6 @@ $effect(() => {
   function getCameraName(cameraId: string): string {
     const camera = cameras.find(c => c.id === cameraId);
     return camera ? camera.name : cameraId;
-  }
-
-  function pad(n: number): string {
-    return String(n).padStart(2, '0');
   }
 
   function getRefreshInterval(): number {
@@ -528,7 +454,6 @@ $effect(() => {
     // the day (no camera_id filter) — DayTimeline buckets per-row in-component.
     void loadDayAIEvents(selectedDate);
     void loadDayMerges(selectedDate);
-    if (showRemote) void loadRemoteArchive(selectedDate);
     try {
       const dayStart = new Date(selectedDate + 'T00:00:00');
       const dayEnd = new Date(selectedDate + 'T23:59:59.999');
@@ -585,38 +510,6 @@ $effect(() => {
       // Events are an overlay, not critical — fail silent.
       aiTimelineEvents = [];
     }
-  }
-
-  // ── Cloud archive (remote offload, issue #874 batch 2) ──
-  // Evicted-locally / remote-only items for the selected day. Loaded on
-  // demand (section toggle) and on every day switch while visible.
-  let showRemote = $state(false);
-  let remoteItems = $state<OffloadRemoteItem[]>([]);
-  let remoteLoading = $state(false);
-  let remoteError = $state('');
-  let remoteAbort: AbortController | undefined;
-  let playingRemoteId = $state<number | null>(null);
-
-  async function loadRemoteArchive(date: string) {
-    if (remoteAbort) remoteAbort.abort();
-    remoteAbort = new AbortController();
-    remoteLoading = true;
-    remoteError = '';
-    try {
-      const { start, end } = remoteDayBounds(date);
-      remoteItems = await listOffloadRecordings({ start, end, limit: 200 }, remoteAbort.signal);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') return;
-      remoteError = t('recordings.remoteLoadFailed');
-      remoteItems = [];
-    } finally {
-      remoteLoading = false;
-    }
-  }
-
-  function toggleRemoteSection() {
-    showRemote = !showRemote;
-    if (showRemote && selectedDate) void loadRemoteArchive(selectedDate);
   }
 
   // Best-effort fetch of the completed merges INTERSECTING the selected day,
@@ -842,119 +735,6 @@ $effect(() => {
     } finally {
       batchMerging = false;
     }
-  }
-
-  // ── Timelapse preset-range handler ──
-  // Given a preset (duration_label), find an existing periodic-merge output
-  // covering the current time window for the selected camera. If found, play
-  // it; otherwise offer to generate one on demand.
-  async function handlePresetClick(preset: { key: string; duration: string }) {
-    const cameraId = selectedPresetCamera || cameras[0]?.id;
-    if (!cameraId) {
-      showToast(t('timelapseMerge.noMergeForRange'), 'error');
-      return;
-    }
-    const now = new Date();
-    try {
-      // Look for a completed merge for this camera whose window_start is on
-      // or after the start of the named window (so e.g. "7d" matches a merge
-      // started within the last 7 days). The backend lists DESC by window_start.
-      const start = computePresetWindowStart(preset.duration, now);
-      const resp = await listTimelapseMerges({
-        camera_id: cameraId,
-        duration: preset.duration,
-        start: start.toISOString(),
-        status: 'completed',
-        limit: 1,
-      });
-      if (resp.merges.length > 0) {
-        // Play the most recent matching merge.
-        window.location.hash = `#/timelapse-merge/${resp.merges[0].id}`;
-        return;
-      }
-      // No existing merge → offer to generate one. Use confirm() for simplicity.
-      const ok = window.confirm(
-        `${t('timelapseMerge.noMergeForRange')}\n${t('timelapseMerge.generatePrompt')}\n\n` +
-        `camera: ${cameras.find(c => c.id === cameraId)?.name ?? cameraId}\n` +
-        `duration: ${preset.duration}`
-      );
-      if (!ok) return;
-      await generateAndPlayPreset(cameraId, preset.duration, now);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : t('common.error'), 'error');
-    }
-  }
-
-  // generateAndPlayPreset triggers a merge for the given camera/duration and
-  // polls progress until completion, then navigates to the player route.
-  async function generateAndPlayPreset(cameraId: string, duration: string, refTime: Date) {
-    if (presetGenerating) return;
-    presetGenerating = true;
-    presetMergeProgress = 0;
-    presetMergeId = null;
-    try {
-      // triggerTimelapseMerge runs the merge for the window containing refTime.
-      // The handler returns 202 immediately; the merge runs in the background.
-      const dateStr = refTime.toISOString().slice(0, 10); // YYYY-MM-DD
-      await triggerTimelapseMerge(cameraId, dateStr, duration);
-      showToast(t('detail.mergeStarted'), 'success');
-      // Subscribe to SSE progress for this camera.
-      presetProgressAbort?.abort();
-      presetProgressAbort = new AbortController();
-      await new Promise<void>((resolve, reject) => {
-        const signal = presetProgressAbort!.signal;
-        const ac = subscribeTimelapseMergeProgress(
-          cameraId,
-          (data) => {
-            if (signal.aborted) return;
-            presetMergeProgress = data.progress ?? 0;
-            if (data.status === 'completed') {
-              mergeHistoryDirty = true; // refresh the history list if still mounted
-              if (selectedDate) void loadDayMerges(selectedDate); // new top strip
-              // Find the merge row for this window+duration and navigate to it.
-              void findAndPlayMerge(cameraId, duration, refTime).then(resolve, reject);
-            } else if (data.status === 'failed') {
-              reject(new Error(data.error || t('timelapseMerge.statusFailed')));
-            }
-          },
-          (err) => {
-            if (!signal.aborted) reject(err);
-          },
-        );
-        // Stash the AbortController returned by subscribe so cleanup works.
-        presetProgressAbort = ac;
-      });
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : t('common.error'), 'error');
-    } finally {
-      presetGenerating = false;
-      presetProgressAbort?.abort();
-      presetProgressAbort = null;
-    }
-  }
-
-  // findAndPlayMerge locates the timelapse_merges row for the just-completed
-  // window and navigates to the player. Retries a few times because the DB
-  // write happens just before the SSE 'completed' event.
-  async function findAndPlayMerge(cameraId: string, duration: string, refTime: Date) {
-    const start = computePresetWindowStart(duration, refTime);
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const resp = await listTimelapseMerges({
-        camera_id: cameraId,
-        duration,
-        start: start.toISOString(),
-        status: 'completed',
-        limit: 1,
-      });
-      if (resp.merges.length > 0) {
-        window.location.hash = `#/timelapse-merge/${resp.merges[0].id}`;
-        return;
-      }
-      await new Promise(r => setTimeout(r, 500));
-    }
-    // Fallback: couldn't find the row — send the user to the recordings list.
-    showToast(t('timelapseMerge.notReady'), 'warning');
-    window.location.hash = '#/recordings';
   }
 
   // ── Deferred load timers ──
@@ -1197,82 +977,9 @@ $effect(() => {
             {t('gb28181.records.tabTitle')}
           </button>
         {/if}
-        <!-- Cloud archive toggle (issue #874 batch 2): remote-only items for
-             the selected day, played through the NVR range proxy. -->
-        <button
-          class="btn btn-sm {showRemote ? 'btn-primary' : 'btn-ghost'} ml-auto"
-          onclick={toggleRemoteSection}
-          aria-expanded={showRemote}
-        >
-          <Cloud size={16} class="mr-1" />
-          {t('recordings.remoteSection')}
-        </button>
+        <!-- Cloud archive toggle + list (issue #874 batch 2). -->
+        <RemoteArchiveSection selectedDate={selectedDate} />
       </div>
-
-      {#if showRemote}
-        <div class="card border th-border p-4 mb-4">
-          <div class="flex items-center gap-2 mb-2">
-            <Cloud size={16} class="th-text-secondary" />
-            <span class="text-sm font-medium th-text-primary">{t('recordings.remoteSection')}</span>
-            <span class="text-xs th-text-tertiary">{t('recordings.remoteSectionHint')}</span>
-          </div>
-          {#if remoteLoading}
-            <p class="text-sm th-text-secondary py-4 text-center">{t('common.loading')}</p>
-          {:else if remoteError}
-            <p class="text-sm th-color-danger py-2">{remoteError}</p>
-          {:else if remoteItems.length === 0}
-            <p class="text-sm th-text-muted py-4 text-center">{t('recordings.remoteEmpty')}</p>
-          {:else}
-            <div class="divide-y th-border">
-              {#each remoteItems as item (item.id)}
-                {@const playable = item.format === 'h264' || item.format === 'h265'}
-                <div class="py-2">
-                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span class="text-sm font-medium th-text-primary font-mono">{item.camera_id}</span>
-                    <span class="text-xs th-text-secondary">{formatDate(item.started_at)}</span>
-                    <span class="text-xs th-text-muted">
-                      {Math.round(item.duration / 60)} min · {formatFileSize(item.uploaded_size)} · {item.format}
-                    </span>
-                    <div class="ml-auto flex items-center gap-2">
-                      {#if playable}
-                        <button
-                          class="btn btn-ghost btn-sm"
-                          onclick={() => (playingRemoteId = playingRemoteId === item.id ? null : item.id)}
-                        >
-                          {t('recordings.remotePlay')}
-                        </button>
-                      {:else}
-                        <span class="text-xs th-text-muted">{t('recordings.remoteMjpegHint')}</span>
-                      {/if}
-                      <a
-                        class="btn btn-ghost btn-sm"
-                        href={offloadObjectURL(item)}
-                        download="{item.camera_id}-{item.recording_id}.{item.format === 'mjpeg' || item.format === 'mjpa' ? 'mp4' : 'mp4'}"
-                      >
-                        <Download size={14} class="mr-1" />
-                        {t('recordings.remoteDownload')}
-                      </a>
-                    </div>
-                  </div>
-                  {#if playingRemoteId === item.id}
-                    <!-- Remote playback rides the range proxy
-                         (/api/offload/objects/{id}, authenticated via the
-                         ?token= query appended by offloadObjectURL); H.264
-                         plays natively, H.265 depends on the browser's HEVC
-                         support. -->
-                    <video
-                      class="w-full max-h-[480px] mt-2 rounded-lg bg-black"
-                      controls
-                      preload="metadata"
-                      src={offloadObjectURL(item)}
-                    ></video>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/if}
 
       <!-- ── Error state ── -->
       {#if calError}
@@ -1300,38 +1007,14 @@ $effect(() => {
                  (right) — play (or generate) a long-window merged timelapse. -->
             <div class="flex items-center gap-2 flex-wrap pb-2 mb-3 border-b th-border">
               <span class="text-[10px] th-text-tertiary">{t('library.timelineLayersHint')}</span>
-              <div class="ml-auto flex items-center gap-2 flex-wrap">
-                <span class="text-xs th-text-tertiary">{t('timelapseMerge.title')}:</span>
-                <!-- Camera picker for presets -->
-                <select
-                  class="input input-xs w-auto"
-                  bind:value={selectedPresetCamera}
-                  disabled={presetGenerating}
-                  aria-label={t('timelapseMerge.camera')}
-                >
-                  {#each cameras as cam}
-                    <option value={cam.id}>{cam.name || cam.id}</option>
-                  {/each}
-                </select>
-                {#each timelapsePresets as preset}
-                  <button
-                    class="btn btn-sm {presetGenerating ? 'btn-ghost' : 'btn-secondary'}"
-                    disabled={presetGenerating || cameras.length === 0}
-                    onclick={() => handlePresetClick(preset)}
-                    title={t(preset.labelKey)}
-                  >
-                    {t(preset.labelKey)}
-                  </button>
-                {/each}
-                {#if presetGenerating}
-                  <span class="text-xs th-text-secondary flex items-center gap-1">
-                    <Hourglass size={12} class="animate-pulse" />
-                    {presetMergeProgress}%
-                  </span>
-                {/if}
-              </div>
+              <TimelapsePresetBar
+                bind:selectedPresetCamera
+                {cameras}
+                selectedDate={selectedDate}
+                ongenerated={handlePresetGenerated}
+              />
             </div>
-            {#if timelineTruncated}
+                        {#if timelineTruncated}
               <div class="flex items-start gap-2 mb-3 p-2 rounded border text-xs th-text-secondary"
                    style="background: rgba(234, 179, 8, 0.08); border-color: rgba(234, 179, 8, 0.35);">
                 <AlertCircle size={14} class="mt-0.5 shrink-0" style="color: #eab308;" />
@@ -1349,61 +1032,11 @@ $effect(() => {
             />
           </div>
 
-          <!-- Completed-merge history (collapsible): every generated merge for
-               the selected camera is reachable here, not just the latest one
-               per preset — the archive behind the timeline's top strips. -->
-          <div class="card border th-border mt-3">
-            <button
-              type="button"
-              class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-black/5 dark:hover:bg-white/5 rounded-t"
-              onclick={toggleHistoryOpen}
-              aria-expanded={historyOpen}
-            >
-              <span class="text-xs font-medium th-text-secondary">
-                {t('timelapseMerge.historyTitle')} · {getCameraName(selectedPresetCamera || cameras[0]?.id || '')}
-              </span>
-              <span class="ml-auto flex items-center gap-2">
-                {#if mergeHistoryLoading}
-                  <span class="text-[10px] th-text-tertiary flex items-center gap-1">
-                    <Hourglass size={10} class="animate-pulse" />
-                    {t('common.loading')}
-                  </span>
-                {/if}
-                <span class="text-[10px] th-text-tertiary">{historyOpen ? '▾' : '▸'}</span>
-              </span>
-            </button>
-            {#if historyOpen}
-              <div class="px-3 pb-3">
-                {#if !mergeHistoryLoading && mergeHistory.length === 0}
-                  <p class="text-xs th-text-tertiary">{t('timelapseMerge.historyEmpty')}</p>
-                {:else}
-                  <div class="flex flex-col gap-1 max-h-72 overflow-y-auto">
-                    {#each mergeHistory as m (m.id)}
-                      <button
-                        class="flex items-center justify-between gap-2 w-full px-2 py-1.5 rounded text-left hover:bg-black/5 dark:hover:bg-white/10"
-                        onclick={() => {
-                          window.location.hash = `#/timelapse-merge/${m.id}`;
-                        }}
-                      >
-                        <span class="flex items-center gap-2 min-w-0">
-                          <span class="text-xs font-mono th-text-secondary shrink-0">
-                            {formatMergeWindowLabel(m.window_start, m.duration_label)}
-                          </span>
-                          <span class="text-[10px] th-text-tertiary shrink-0">{mergeDurationLabel(m.duration_label)}</span>
-                        </span>
-                        <span class="text-[10px] th-text-tertiary shrink-0">
-                          {m.frame_count} {t('timelapseMerge.framesUnit')} · {formatFileSize(m.file_size)}
-                        </span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-                <p class="text-[10px] th-text-tertiary mt-2">
-                  {t('timelapseMerge.generatePrompt')}
-                </p>
-              </div>
-            {/if}
-          </div>
+          <MergeHistoryCard
+            cameraId={selectedPresetCamera || cameras[0]?.id || ''}
+            cameraName={getCameraName(selectedPresetCamera || cameras[0]?.id || '')}
+            bind:dirty={mergeHistoryDirty}
+          />
         {/if}
       {:else if viewMode === 'list'}
         <!-- ── List view ── -->
@@ -1513,30 +1146,7 @@ $effect(() => {
 {/if}
 
 <!-- ── AVI Playback modal ── -->
-{#if showAviPlayback}
-  <div
-    class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
-    onclick={() => showAviPlayback = false}
-    role="dialog"
-    aria-modal="true"
-  >
-    <div
-      class="card max-w-3xl w-full p-4"
-      onclick={(e) => e.stopPropagation()}
-    >
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-lg font-semibold th-text-primary">{t('avi.title')}</h3>
-        <button
-          onclick={() => showAviPlayback = false}
-          class="btn btn-ghost btn-sm"
-        >
-          ✕
-        </button>
-      </div>
-      <AviPlayback recordingId={playbackRecordingId} />
-    </div>
-  </div>
-{/if}
+<AviPlaybackModal bind:open={showAviPlayback} recordingId={playbackRecordingId} />
 
 <style>
   /* AI markers toggle pill — sits beside FormatFilter. Reuses surface/border

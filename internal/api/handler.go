@@ -15,8 +15,13 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/camerasapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/gbapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/notifyapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/recordingsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/relayapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/systemapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -28,10 +33,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recframes"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
@@ -144,70 +147,6 @@ type CameraHealthDetail struct {
 	Score  int    `json:"score"`
 }
 
-// SystemStats is the response from /api/stats/system.
-type SystemStats struct {
-	CPU       CPUStats     `json:"cpu"`
-	Memory    MemoryStats  `json:"memory"`
-	Network   NetworkStats `json:"network"`
-	Uptime    string       `json:"uptime"`
-	Timestamp int64        `json:"timestamp"`
-	// Load / Disk 补齐饱和观测(2026-09-11 M5 IO 饱和事故:73% iowait + 负载
-	// 15 在既有 CPU 瓦片上完全不可见——CPU 忙闲是低的)。nil = 不可用平台。
-	Load *LoadStats `json:"load,omitempty"`
-	Disk *DiskStats `json:"disk,omitempty"`
-	// DB 写事务来源观测(#759):每来源累计数 + 每秒速率(服务端按两次采样
-	// 窗口计算)。nil = 尚无第二个采样窗口。
-	DB *DBTxnStats `json:"db,omitempty"`
-}
-
-// DBTxnStats 是按来源聚合的 DB 写事务面板数据(#759)。
-type DBTxnStats struct {
-	// Sources 按累计数降序(写热点排序一眼可见)。
-	Sources []DBTxnSource `json:"sources"`
-}
-
-type DBTxnSource struct {
-	Name      string  `json:"name"`
-	Total     int64   `json:"total"`
-	PerSecond float64 `json:"per_second"`
-	AvgMs     float64 `json:"avg_ms"`
-}
-
-type CPUStats struct {
-	Total  uint64 `json:"total"`  // cumulative total jiffies
-	Idle   uint64 `json:"idle"`   // cumulative idle jiffies
-	Iowait uint64 `json:"iowait"` // cumulative iowait jiffies (delta between polls = iowait%)
-}
-
-// LoadStats 是 /proc/loadavg 快照(1/5/15 分钟)。
-type LoadStats struct {
-	One     float64 `json:"one"`
-	Five    float64 `json:"five"`
-	Fifteen float64 `json:"fifteen"`
-}
-
-// DiskStats 是录像根的容量水位。WatermarkPct 取 cleanup.disk_threshold_percent
-// (清理已在执行的阈值),used_pct 越线即 status=high——录满盘前的可见预警。
-type DiskStats struct {
-	Path         string  `json:"path"`
-	TotalBytes   uint64  `json:"total_bytes"`
-	FreeBytes    uint64  `json:"free_bytes"`
-	UsedPct      float64 `json:"used_pct"`
-	WatermarkPct float64 `json:"watermark_pct"`
-	Status       string  `json:"status"` // ok | high | unknown
-}
-
-type MemoryStats struct {
-	Total      uint64 `json:"total"`       // MemTotal bytes
-	Available  uint64 `json:"available"`   // MemAvailable bytes
-	ProcessRSS uint64 `json:"process_rss"` // NVR process RSS bytes
-}
-
-type NetworkStats struct {
-	BytesSent uint64 `json:"bytes_sent"`
-	BytesRecv uint64 `json:"bytes_recv"`
-}
-
 // capabilitiesResponse is the response for GET /api/capabilities.
 type capabilitiesResponse struct {
 	Ingest ingestCapabilities `json:"ingest"`
@@ -223,17 +162,6 @@ type protocolCapability struct {
 	Enabled bool `json:"enabled"`
 	Port    int  `json:"port"`
 }
-type snapshotCache struct {
-	data      []byte
-	timestamp time.Time
-}
-
-// SnapshotCapturer captures one JPEG for a camera — satisfied by
-// *snapshot.Capturer (FFmpeg-gated decode + device snapshot-URL fallback,
-// #657). Interface keeps the handler testable with a stub.
-type SnapshotCapturer interface {
-	Capture(cameraID string) ([]byte, error)
-}
 
 // Handler holds dependencies for the REST API handlers.
 
@@ -248,24 +176,22 @@ type Handler struct {
 	// "playback" tenant (#886, gray-release). nil (default) = ServeFile
 	// semantics unchanged.
 	playbackBudget atomic.Pointer[iobudget.Limiter]
-	// DB txn panel rate window (#759): previous /api/system/stats sample.
-	dbTxnMu           sync.Mutex
-	dbTxnPrev         *dbTxnSample
-	db                *storage.DB
-	store             *storage.Manager
-	authMW            func(http.Handler) http.Handler
-	config            *config.Config
-	camMgr            *camera.CameraManager
-	hlsMgr            *hls.Manager
-	webrtcMgr         *webrtc.Manager
-	flvMgr            *flv.Manager
-	wsMgr             *wsstream.Manager
-	viewerStore       *viewer.Store
-	viewerLogin       ViewerLoginFn
-	configPath        string
-	snapshotMu        sync.RWMutex
-	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
-	snapCapturer      SnapshotCapturer
+	db             *storage.DB
+	store          *storage.Manager
+	authMW         func(http.Handler) http.Handler
+	config         *config.Config
+	camMgr         *camera.CameraManager
+	hlsMgr         *hls.Manager
+	webrtcMgr      *webrtc.Manager
+	flvMgr         *flv.Manager
+	wsMgr          *wsstream.Manager
+	viewerStore    *viewer.Store
+	viewerLogin    ViewerLoginFn
+	configPath     string
+	// snapStore owns the shared JPEG-still TTL cache (snapshot / latest-frame /
+	// HLS stale-serve) — state lives in the streamsapi domain package, the
+	// capturer is wired here and forwarded into its Deps.
+	snapStore         *streamsapi.SnapshotStore
 	mergeMgr          *merge.MergeManager
 	rollingMergeMgr   *merge.RollingMergeCoordinator
 	healthMgr         HealthManager
@@ -350,7 +276,8 @@ type Handler struct {
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager, timeSync TimeSyncOps) *Handler {
-	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), recFrames: recframes.New(), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, recFrames: recframes.New(), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	h.snapStore = streamsapi.NewSnapshotStore()
 	// The device-record domain service shares the handler's post-injection
 	// wiring: media API, device registry, GB timezone (#1009).
 	h.gb28181Records = gb28181.NewDeviceRecordService()
@@ -402,24 +329,40 @@ func (h *Handler) Routes() http.Handler {
 	// Protected routes (behind authMW)
 	r.Group(func(r chi.Router) {
 		r.Use(h.authMW)
-		h.registerRecordingRoutes(r)
-		h.registerCameraRoutes(r)
-		h.registerFlowRoutes(r)
-		h.registerSystemRoutes(r)
-		h.registerMergeRoutes(r)
-		h.registerTimelapseRoutes(r)
-		h.registerONVIFRoutes(r)
-		h.registerOnboardingRoutes(r)
-		h.registerArchiveRoutes(r)
-		h.registerXiaomiRoutes(r)
+		recordingsapi.Register(r, recordingsDeps(h))
+		camerasapi.Register(r, camerasDeps(h))
+		streamsapi.Register(r, streamsDeps(h))
+		systemapi.Register(r, systemDeps(h))
+		// License / P2P / update / rtsp-output settings stay at the root until
+		// their domains extract (handlers_license/_p2p/_update/_settings_rtsp).
+		r.Get("/api/version", h.handleVersion)
+		r.Get("/api/license", h.handleGetLicense)
+		r.Put("/api/license", h.handleInstallLicense)
+		r.Get("/api/settings/rtsp-output", h.handleGetRtspOutputSettings)
+		r.Put("/api/settings/rtsp-output", h.handleUpdateRtspOutputSettings)
+		r.Get("/api/p2p/status", h.handleGetP2PStatus)
+		r.Post("/api/p2p/viewer-report", h.handleP2pViewerReport)
+		r.Get("/api/p2p/viewer", h.handleGetP2pViewer)
+		r.Get("/api/settings/p2p", h.handleGetP2PSettings)
+		r.Put("/api/settings/p2p", h.handleUpdateP2PSettings)
+		r.Get("/api/p2p/association", h.handleGetP2PAssociation)
+		r.Post("/api/p2p/association/request", h.handleRequestP2PAssociation)
+		r.Post("/api/p2p/association/confirm", h.handleConfirmP2PAssociation)
+		r.Post("/api/p2p/association/enroll", h.handleEnrollP2PAssociation)
+		r.Post("/api/p2p/association/unbind", h.handleUnbindP2PAssociation)
+		r.Post("/api/p2p/association/cancel", h.handleCancelP2PAssociation)
+		r.Get("/api/update/check", h.handleUpdateCheck)
+		r.Post("/api/update/check", h.handleUpdateCheck)
+		r.Post("/api/update/apply", h.handleUpdateApply)
+		r.Get("/api/update/apply/status", h.handleUpdateApplyStatus)
+		r.Get("/api/update/history", h.handleUpdateHistory)
 		h.registerHealthRoutes(r)
 		relayapi.Register(r, relayapi.Deps{Relay: relayDeps(h.relayMgr)})
-		h.registerTranscodeRoutes(r)
 		h.registerAIRoutes(r)
 		h.registerVisionRoutes(r)
 		h.registerTelemetryRoute(r)
 		h.registerViewerRoutes(r)
-		h.registerGB28181Routes(r)
+		gbapi.Register(r, gbDeps(h))
 		h.registerDoorbellRoutes(r)
 		notifyapi.Register(r, notifyapi.Deps{Service: notifyDeps(h.notifySvc)})
 		h.registerMediaRoutes(r)
@@ -449,12 +392,9 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		r.Get("/api/readyz", h.handleReadyz)
 		r.Get("/api/capabilities", h.handleCapabilities)
 		// Webhook trigger (public, rate-limited — HMAC signature is the credential, #709)
-		h.registerTriggerRoutes(r)
-		// GB28181 snapshot upload (public, rate-limited — the session ID in
-		// the URL is the credential; devices cannot BasicAuth, #708)
-		if h.gb28181SnapMgr != nil {
-			r.Post("/api/gb28181/snapshot/upload", h.handleGB28181SnapshotUpload)
-		}
+		camerasapi.RegisterPublic(r, camerasDeps(h))
+		// GB28181 snapshot upload lives in the gb domain (public callback).
+		gbapi.RegisterPublic(r, gbDeps(h))
 		// ONVIF push-event notify consumer (public, rate-limited — the token
 		// in the URL is the credential; devices cannot BasicAuth, #922)
 		if h.camMgr != nil {
@@ -508,36 +448,9 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 // group. The remote offload playback proxy (#874 batch 2, tightened #893)
 // shares this exposure class — outbox ids are equally predictable.
 func (h *Handler) registerMediaRoutes(r chi.Router) {
-	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)
-	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
-	// Audio-only recordings (v43): G.711 → WAV pure-Go transcode (browsers
-	// don't play G.711-in-MP4). Same auth class as download + audit log, and
-	// per-IP rate-limited on top: the transcode is CPU work proportional to
-	// segment size, so a looping/scrubbing client must not be able to turn
-	// playback into a self-DoS (60/min covers segment-per-click playback plus
-	// browser range re-probes with wide margin). The live-listening stream
-	// shares the limiter for its OPEN (sessions are long-lived — one request
-	// each, the limiter never bites mid-stream).
-	r.Group(func(r chi.Router) {
-		rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
-			MaxRequests: 60,
-			Window:      time.Minute,
-		})
-		r.Use(rl.Handler)
-		r.Get("/api/recordings/{id}/audio.wav", h.handleAudioWav)
-		r.Head("/api/recordings/{id}/audio.wav", h.handleAudioWav)
-		r.Get("/api/cameras/{cameraID}/audio/live.wav", h.handleAudioLiveWav)
-		r.Get("/api/cameras/{cameraID}/audio/live", h.handleAudioLive)
-	})
-	// Audio access audit trail (compliance): the WAV fetch above and live
-	// sessions append here; queryable newest-first.
-	r.Get("/api/recordings/audio-audit", h.handleAudioAudit)
-	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)
-	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
-	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
-	r.Head("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
-	r.Get("/api/cameras/{cameraID}/playback/playlist.m3u8", h.handlePlaybackPlaylist)
-	r.Get("/api/cameras/{cameraID}/playback/{recordingID}/{segName}", h.handlePlaybackSegment)
+	// Live camera audio (xiaomi/two-way speakers; camera-audio domain concern)
+	// and the remote-offload proxy share this exposure class with the
+	// recording download paths, which moved to recordingsapi.
 	r.Get("/api/offload/objects/{id}", h.handleOffloadObject)
 	r.Head("/api/offload/objects/{id}", h.handleOffloadObject)
 }
@@ -563,25 +476,7 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // defaultLimit is used when ?limit is absent or invalid; maxLimit<=0 disables
 // the upper-bound clamp. offset defaults to 0 and is never negative.
 func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int) {
-	limit = defaultLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if maxLimit > 0 && limit > maxLimit {
-		limit = maxLimit
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
-	return limit, offset
-}
-
-func writeAPIError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{"error": err.Error(), "code": model.ErrorCode(err)})
+	return httpx.ParsePagination(r, defaultLimit, maxLimit)
 }
 
 // validateURL checks that a URL has a valid scheme and non-empty host.
@@ -598,15 +493,6 @@ func validateURL(rawURL string) bool {
 		return false
 	}
 	return true
-}
-
-// validateIP checks that a string is a valid IPv4 or IPv6 address, supporting ip:port format.
-func validateIP(ip string) bool {
-	// Support ip:port format (e.g., "192.168.1.100:8080")
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		return net.ParseIP(host) != nil
-	}
-	return net.ParseIP(ip) != nil
 }
 
 // noopAuthMW is a middleware that passes all requests through (no auth).
@@ -635,210 +521,6 @@ func testHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 		GetHash:     func() string { return passwordHash },
 	}, "", middleware.AuthRateLimitConfig{})
 	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
-}
-
-// extractDIDFromURL parses the DID from a xiaomi:// URL.
-func extractDIDFromURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	return u.Host
-}
-
-// strPtr returns a pointer to the given string.
-func strPtr(s string) *string {
-	return &s
-}
-
-// cameraProtocolsResponse is the response for GET /api/cameras/{id}/protocols.
-type cameraProtocolsResponse struct {
-	Protocols []ProtocolDetail `json:"protocols"`
-	Encoding  string           `json:"encoding"`
-	Default   string           `json:"default"`
-	// RTSP exposes the built-in RTSP output server pull URL (#522) — the
-	// address third-party platforms (Synology etc.) fill in as a camera
-	// source. Nil when the server is disabled.
-	RTSP *rtspEndpointDetail `json:"rtsp,omitempty"`
-	// SubStream reports the camera's sub-stream capability (#512): where a
-	// lower-resolution secondary feed exists (or can be configured), for
-	// consumers like grid preview, cascade and external AI push.
-	SubStream subStreamDetail `json:"sub_stream"`
-}
-
-// rtspEndpointDetail describes the RTSP pull endpoint for one camera.
-type rtspEndpointDetail struct {
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
-	URL       string `json:"url,omitempty"`
-}
-
-// subStreamDetail describes the sub-stream capability of one camera.
-type subStreamDetail struct {
-	Available bool   `json:"available"`
-	Source    string `json:"source,omitempty"` // "onvif" (auto-discovered) | "manual" (URL set)
-	Reason    string `json:"reason,omitempty"` // why not, when unavailable
-	// Codec is the sub-stream's ACTUAL codec once a pull has come up — it can
-	// differ from the main stream's (devices switching codec families between
-	// profiles are common). Empty until first observed; consumers gate on it
-	// when the decode path is codec-sensitive (e.g. MSE H.265 browsers).
-	Codec string `json:"codec,omitempty"`
-}
-
-// handleCameraProtocols handles GET /api/cameras/{id}/protocols.
-// It returns the available streaming protocols for a specific camera
-// based on its encoding and the registered stream handlers.
-func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	cam, err := h.db.GetCamera(r.Context(), id)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "failed to get camera")
-		return
-	}
-	if cam == nil {
-		WriteError(w, http.StatusNotFound, "camera not found")
-		return
-	}
-
-	encoding := strings.ToLower(cam.Encoding)
-	if encoding == "" {
-		encoding = strings.ToLower(cam.StreamEncoding)
-	}
-
-	// Probe the running recorder for the actual codec. The recorder reads the
-	// REAL codec from the live stream (RTSP DESCRIBE for ONVIF/RTSP, MISS
-	// CodecID for Xiaomi, etc.), which is authoritative over the DB-stored
-	// encoding. The stored encoding may be stale or wrong — e.g. Xiaomi CS2
-	// cameras that were initially configured as h264 but actually stream h265
-	// (the recorder detects codec=h265, but DB still says h264). Without this
-	// probe, /protocols returns the wrong encoding, the frontend picks protocols
-	// that can't handle the actual codec (WebRTC for H.265, FLV without MSE
-	// H.265), and EVERY protocol renders black.
-	//
-	// Previously this probe was gated to ONVIF + empty-encoding only, out of
-	// fear that a runtime probe might mislabel a correctly-configured camera.
-	// But the recorder's codec detection is reliable (it reads actual stream
-	// data), and the cost of a wrong DB encoding (all-protocols-black-screen)
-	// is far worse than an occasional over-correction. Trust the recorder.
-	if h.camMgr != nil {
-		if rec := h.camMgr.GetRecorder(id); rec != nil {
-			if codec, _, _, _ := getCodecParams(rec); codec != "" {
-				encoding = string(codec)
-			}
-		}
-	}
-
-	var protocols []ProtocolDetail
-	if h.streamRegistry != nil {
-		protocols = h.streamRegistry.ProtocolsDetailForCodec(model.Format(encoding))
-	}
-	if protocols == nil {
-		protocols = []ProtocolDetail{}
-	}
-
-	// Determine default protocol by latency-optimal fallback order. The global
-	// streaming.default_protocol config was removed — the frontend Player
-	// Orchestrator now auto-selects per camera based on this hint + browser
-	// capability, demoting on health failure. Per-camera overrides remain via
-	// the Protocol Switcher on each camera's LiveView page.
-	defaultProto := ""
-	for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls", "mjpeg"} {
-		for _, p := range protocols {
-			if p.Protocol == preferred && p.Available {
-				defaultProto = preferred
-				break
-			}
-		}
-		if defaultProto != "" {
-			break
-		}
-	}
-
-	writeJSON(w, http.StatusOK, cameraProtocolsResponse{
-		Protocols: protocols,
-		Encoding:  encoding,
-		Default:   defaultProto,
-		RTSP:      h.rtspEndpointFor(r, id, model.Format(encoding)),
-		SubStream: h.subStreamDetailFor(id),
-	})
-}
-
-// subStreamDetailFor derives the camera's sub-stream capability (#512) from
-// its protocol and configured/discovered sub fields. "Available" means a
-// consumer can request a sub stream today; unavailable reasons guide the UI.
-func (h *Handler) subStreamDetailFor(cameraID string) subStreamDetail {
-	var cam *config.CameraConfig
-	if h.camMgr != nil {
-		cam = h.camMgr.GetCameraConfig(cameraID)
-	}
-	if cam == nil {
-		return subStreamDetail{Reason: "camera config unavailable"}
-	}
-	switch {
-	case cam.SubStreamURL != "":
-		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "manual"}, cameraID)
-	case cam.SubProfileToken != "":
-		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "onvif"}, cameraID)
-	case cam.Protocol == string(model.ProtoGB28181) && strings.TrimSpace(cam.GB28181.SubChannelID) != "":
-		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "gb-sub-channel"}, cameraID)
-	}
-	switch cam.Protocol {
-	case "onvif":
-		// Discovery runs once after the recorder comes online; until then (or
-		// on single-profile cameras) there is no sub stream to consume.
-		return subStreamDetail{Reason: "no secondary ONVIF profile discovered (single-stream camera, or discovery pending)"}
-	case "rtsp_h264", "rtsp_mjpeg", string(model.ProtoRTSP):
-		return subStreamDetail{Reason: "set sub_stream_url to use this camera's sub stream"}
-	case "gb28181":
-		// Prober (#560) runs once per channel per boot after the catalog
-		// merges (vendor-gated in auto mode); no code = device has no
-		// usable sub channel — degrade to main, never an error state.
-		return subStreamDetail{Reason: "no sub-channel probed (device has no vendor-convention sub stream, or probe pending)"}
-	default:
-		// xiaomi (proprietary single stream), srt/rtmp push (publisher owns
-		// the encode), http_jpeg/mjpeg (already low-bitrate stills).
-		return subStreamDetail{Reason: "protocol does not expose a sub stream"}
-	}
-}
-
-// withSubStreamCodec decorates an availability verdict with the puller's
-// observed codec when a sub-stream source is currently alive — the /protocols
-// consumer (SPA quality gating) uses it to predict decodability before
-// requesting quality=sub.
-func (h *Handler) withSubStreamCodec(d subStreamDetail, cameraID string) subStreamDetail {
-	if !d.Available || h.camMgr == nil {
-		return d
-	}
-	for _, st := range h.camMgr.SubStreams().Snapshot() {
-		if st.CameraID == cameraID && st.Codec != "" {
-			d.Codec = string(st.Codec)
-			break
-		}
-	}
-	return d
-}
-
-// rtspEndpointFor builds the RTSP output-server entry for the protocols
-// response (#522): available when the server is enabled and the camera's codec
-// is servable (H.264/H.265/MJPEG). The URL targets the requesting host (with
-// configured credentials embedded, #686) so it is directly copy-pasteable.
-func (h *Handler) rtspEndpointFor(r *http.Request, cameraID string, codec model.Format) *rtspEndpointDetail {
-	if h.config == nil || h.config.Server.RTSP.Enabled == nil || !*h.config.Server.RTSP.Enabled {
-		return nil
-	}
-	detail := &rtspEndpointDetail{}
-	switch codec {
-	case model.FormatH264, model.FormatH265, model.FormatMJPEG:
-		// Parameter readiness mirrors the RTSP server's own gate — an idle or
-		// warming-up camera still gets the URL (clients retry DESCRIBE).
-		detail.Available = true
-		detail.URL = rtsp.URLForAuth(r.Host, h.config.Server.RTSP.Port, cameraID,
-			h.config.Server.RTSP.Username, h.config.Server.RTSP.Password)
-	default:
-		detail.Reason = "codec not servable over RTSP (H.264/H.265/MJPEG only)"
-	}
-	return detail
 }
 
 // handleCapabilities handles GET /api/capabilities.
@@ -916,10 +598,7 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 // goto crossing the full pan range on a slow motor — if the window expires
 // mid-move the moving scene reads as activity and pollutes adaptive
 // recording and motion events. Stop only needs the scene to settle.
-const (
-	ptzSuppressWindowMove  = 30 * time.Second
-	ptzSuppressWindowShort = 8 * time.Second
-)
+const ()
 
 // SetPTZSuppressor wires the pixgate suppression hook fired on every PTZ
 // command (move / stop / goto preset), all protocols.
