@@ -1,6 +1,6 @@
 # Sub-Streams (Low-Resolution Secondary Streams)
 
-> For MiBeeNvr v0.13.0
+> Applies to the current MiBeeNvr release
 
 Most IP cameras output two streams: the **main stream** (high resolution, for recording) and a **sub-stream** (low resolution/bitrate, traditionally for previews). MiBee NVR makes the sub-stream an **on-demand** first-class citizen: the surveillance grid, GB cascade, and external AI consumers ride the sub-stream while **main-stream recording is untouched**; with no viewers the sub-stream pull stops by itself — zero cost when nobody watches.
 

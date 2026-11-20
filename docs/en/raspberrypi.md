@@ -1,6 +1,6 @@
 # Raspberry Pi Camera Integration
 
-> For MiBeeNvr v0.13.0
+> Applies to the current MiBeeNvr release
 
 MiBee NVR supports Raspberry Pi CSI cameras directly via libcamera, as well as network RTSP / ONVIF cameras.
 

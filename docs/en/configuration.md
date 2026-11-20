@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> For MiBeeNvr v0.13.0
+> Applies to the current MiBeeNvr release
 
 MiBee NVR uses a YAML configuration file to control all aspects of its operation. Below is a comprehensive reference of all available options, their defaults, and usage examples.
 
