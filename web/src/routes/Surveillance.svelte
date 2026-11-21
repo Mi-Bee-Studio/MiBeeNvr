@@ -17,6 +17,7 @@
   import { WALL_TEMPLATES, wallGeometry, getWallTemplate, tileQualityFor, wallRowEstimate, fillSelection, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
   import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
+  import type { WallPreset } from '$lib/wall-presets';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -261,6 +262,45 @@
     // is what drives auto-selection; runs in parallel and never blocks render.
     // (refreshCameraProtocols calls syncOrchestrator again once responses land.)
     void refreshCameraProtocols(filtered.map((c) => c.id));
+  }
+
+  // Load a saved wall combination: restore the camera selection AND the wall
+  // settings captured with it, then apply exactly like a manual Apply (same
+  // unregister/register + protocol refresh discipline). Settings are written
+  // through their preference setters so localStorage stays consistent with
+  // what the grid renders. Cameras that no longer exist are dropped.
+  function loadWallPreset(preset: WallPreset) {
+    const previousIds = [...selectedCameraIds];
+    maxGridCameras = preset.maxGridCameras;
+    setMaxGridCameras(maxGridCameras);
+    photoWall = preset.photoWall;
+    setPhotoWallEnabled(photoWall);
+    rotationSecs = preset.rotationSecs;
+    setWallRotationSecs(rotationSecs);
+    wallTemplateId = preset.wallTemplateId;
+    setWallTemplateId(wallTemplateId);
+
+    // Compute the cap from the NEW capacity directly — `effectiveMax` is a
+    // $derived that may not have recomputed within this same tick.
+    const cap = Math.min(
+      preset.maxGridCameras,
+      Math.max(gridCapacityOptions[gridCapacityOptions.length - 1] ?? MAX_GRID_CAMERAS_DEFAULT, CLASSIC_GRID_SIZE),
+    );
+    const available = new Map(allCameras.map((c) => [c.id, c]));
+    const validIds = preset.cameraIds
+      .filter((id) => available.has(id))
+      .slice(0, cap);
+    pendingCameraIds = [...validIds];
+    selectedCameraIds = [...validIds];
+    saveCameraIds(selectedCameraIds);
+    cameras = validIds.map((id) => available.get(id)!);
+
+    const newIds = new Set(validIds);
+    for (const id of previousIds) {
+      if (!newIds.has(id)) orchestrator.unregisterCamera(id);
+    }
+    syncOrchestrator();
+    void refreshCameraProtocols(validIds);
   }
 
   function getStreamUrl(cameraId: string): string {
@@ -762,6 +802,7 @@
         bind:pendingCameraIds
         onapply={applyCameraSelection}
         onchangecapacity={changeGridCapacity}
+        onloadpreset={loadWallPreset}
         ondismiss={() => (configOpen = false)}
       />
     {/if}
