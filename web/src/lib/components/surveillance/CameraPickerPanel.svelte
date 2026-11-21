@@ -9,13 +9,18 @@
   // and reads it back on apply); wall preferences persist here and mirror
   // into the parent through bindables. Grid-capacity changes stay in the
   // parent (they grow/trim the applied grid), surfaced as a callback.
-  import { Search, X, Plus, Settings as SettingsIcon } from 'lucide-svelte';
+  import { Search, X, Plus, Settings as SettingsIcon, Save, Trash2 } from 'lucide-svelte';
   import { t } from '$lib/i18n';
+  import { showToast } from '$lib/toast.svelte';
   import {
     setMaxGridCameras, setPhotoWallEnabled, setWallRotationSecs, setWallTemplateId,
     WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS,
   } from '$lib/preferences';
   import { wallGeometry, WALL_TEMPLATES, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
+  import {
+    listWallPresets, saveWallPreset, deleteWallPreset, MAX_WALL_PRESETS,
+    type WallPreset,
+  } from '$lib/wall-presets';
   import type { Camera } from '$lib/api';
 
   interface Props {
@@ -33,6 +38,8 @@
     onapply: () => void;
     /** Fired on a capacity chip (parent grows/trims the applied grid). */
     onchangecapacity: (n: number) => void;
+    /** Fired when a saved wall preset is loaded — the parent applies it. */
+    onloadpreset: (preset: WallPreset) => void;
     /** Fired on Dismiss — the parent closes the panel. */
     ondismiss: () => void;
   }
@@ -50,11 +57,53 @@
     pendingCameraIds = $bindable(),
     onapply,
     onchangecapacity,
+    onloadpreset,
     ondismiss,
   } = $props();
 
   let configSearch = $state('');
   let onlineOnly = $state(true);
+
+  // Saved wall combinations (max 3). Loaded on mount and refreshed after
+  // every save/delete so the chips always mirror localStorage.
+  let wallPresets = $state<WallPreset[]>(listWallPresets());
+  let presetName = $state('');
+
+  function refreshPresets() {
+    wallPresets = listWallPresets();
+  }
+
+  function handleSavePreset() {
+    if (!presetName.trim()) {
+      showToast(t('dashboard.presetNameRequired'), 'error');
+      return;
+    }
+    const saved = saveWallPreset({
+      name: presetName,
+      cameraIds: pendingCameraIds,
+      maxGridCameras,
+      photoWall,
+      rotationSecs,
+      wallTemplateId,
+    });
+    if (!saved) {
+      showToast(t('dashboard.presetFull'), 'error');
+      return;
+    }
+    presetName = '';
+    refreshPresets();
+    showToast(t('dashboard.presetSaved'), 'success');
+  }
+
+  function handleDeletePreset(preset: WallPreset) {
+    wallPresets = deleteWallPreset(preset.id);
+    showToast(t('dashboard.presetDeleted'), 'success');
+  }
+
+  function handleLoadPreset(preset: WallPreset) {
+    onloadpreset(preset);
+    showToast(t('dashboard.presetLoaded', { name: preset.name }), 'success');
+  }
 
   function changeWallTemplate(id: string) {
     wallTemplateId = id;
@@ -250,6 +299,59 @@
     >
       {t('dashboard.clearSelection')}
     </button>
+  </div>
+
+  <!-- Saved wall combinations (max 3): one-click switch between named
+       presets. Saving captures the pending selection + the current wall
+       settings; loading hands the snapshot to the parent to apply. -->
+  <div class="rounded-md border th-border px-3 py-2 mb-3">
+    <div class="flex items-center gap-2 mb-2 flex-wrap">
+      <span class="text-xs font-semibold th-text-primary">{t('dashboard.presetsTitle')}</span>
+      <span class="text-[11px] th-text-muted">{wallPresets.length} / {MAX_WALL_PRESETS}</span>
+      <div class="flex-1"></div>
+      <input
+        type="text"
+        class="input py-1 text-xs w-36"
+        placeholder={t('dashboard.presetNamePlaceholder')}
+        bind:value={presetName}
+        maxlength={32}
+        onkeydown={(e) => { if (e.key === 'Enter') handleSavePreset(); }}
+      />
+      <button
+        type="button"
+        class="btn btn-ghost text-xs px-2 py-1 inline-flex items-center gap-1"
+        onclick={handleSavePreset}
+        title={t('dashboard.presetFull')}
+      >
+        <Save size={13} />
+        {t('dashboard.presetSave')}
+      </button>
+    </div>
+    {#if wallPresets.length === 0}
+      <p class="text-[11px] th-text-muted">{t('dashboard.presetEmpty')}</p>
+    {:else}
+      <div class="flex flex-wrap gap-1.5">
+        {#each wallPresets as preset (preset.id)}
+          <span class="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-[var(--bg-tertiary)] text-xs">
+            <button
+              type="button"
+              class="hover:underline"
+              onclick={() => handleLoadPreset(preset)}
+              title={t('dashboard.presetLoad')}
+            >{preset.name}</button>
+            <button
+              type="button"
+              class="p-0.5 rounded-full hover:bg-[var(--bg-elevated)] transition-colors th-text-muted"
+              onclick={() => handleDeletePreset(preset)}
+              aria-label={t('dashboard.presetDelete')}
+              title={t('dashboard.presetDelete')}
+            >
+              <Trash2 size={12} />
+            </button>
+          </span>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <!-- Selected chips (ordered — grid position order) -->
