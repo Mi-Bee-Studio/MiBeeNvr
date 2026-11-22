@@ -134,6 +134,12 @@ func (h *HealthTracker) SetOnRecovery(f func()) {
 // RecordHeartbeat 记录一次 Vision 心跳。
 func (h *HealthTracker) RecordHeartbeat(status HeartbeatStatus) {
 	h.mu.Lock()
+	// wasHealthy 是「上一拍」的健康态：上次心跳仍新鲜、且其 status 不是
+	// degraded。onRecovery 只在 unhealthy→healthy 的**跃迁**沿触发——
+	// 持续上报 degraded 的消费者每一拍都读出 wasHealthy=false，旧行为会
+	// 每个心跳间隔都触发一次补偿回调，而补偿入口的 IsHealthy() 又立即
+	// 判不健康退出：30s 一次空转（全量 DB 查询 + INFO/WARN 成对刷屏），
+	// 积压只涨不消。
 	wasHealthy := !h.lastSeen.IsZero() && time.Since(h.lastSeen) < h.timeout &&
 		h.status.Status != "degraded"
 	now := time.Now()
@@ -160,7 +166,10 @@ func (h *HealthTracker) RecordHeartbeat(status HeartbeatStatus) {
 	h.samples = append(h.samples, sample)
 	cb := h.onRecovery
 	h.mu.Unlock()
-	if !wasHealthy && cb != nil {
+	// 本拍自身健康（心跳刚到，新鲜度天然成立，只看 status）且上一拍不健康
+	// = 跃迁沿：真正的「离线缺口后恢复」或「degraded 恢复」。已健康的重复
+	// 心跳、以及自身就不健康的心跳，都不触发。
+	if !wasHealthy && status.Status != "degraded" && cb != nil {
 		// Fire off the request goroutine — the heartbeat handler must not
 		// block on compensation work.
 		go cb()

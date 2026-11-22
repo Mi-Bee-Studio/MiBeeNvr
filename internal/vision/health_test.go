@@ -5,6 +5,7 @@ package vision
 // that backs GET /api/vision/metrics.
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,4 +87,73 @@ func TestHealthTracker_DropsCarriedInSnapshot(t *testing.T) {
 	require.Equal(t, int64(7), status.Drops.Seq)
 	require.Len(t, status.Drops.Ranges, 1)
 	require.Equal(t, "queue_full", status.Drops.Ranges[0].Reason)
+}
+
+// --- onRecovery transition semantics ---
+
+// TestHealthTracker_OnRecoveryTransitionOnly : onRecovery 必须只在
+// unhealthy→healthy 的跃迁沿触发。持续上报 degraded 的消费者旧行为下
+// 每个心跳间隔都触发一次补偿回调，补偿入口 IsHealthy() 又立即判不健康
+// 退出——30s 一次空转（DB 全量查询 + INFO/WARN 成对刷屏）、积压只涨不消。
+func TestHealthTracker_OnRecoveryTransitionOnly(t *testing.T) {
+	h := NewHealthTracker(60)
+
+	var fired atomic.Int32
+	h.SetOnRecovery(func() { fired.Add(1) })
+
+	// 持续 degraded：任何一拍都不触发。
+	for range 5 {
+		h.RecordHeartbeat(HeartbeatStatus{Status: "degraded"})
+	}
+	require.Equal(t, int32(0), fired.Load(), "persistent degraded must never fire recovery")
+	require.False(t, h.IsHealthy())
+
+	// degraded→healthy 跃迁沿：恰好触发一次。
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	require.Eventually(t, func() bool { return fired.Load() == 1 },
+		2*time.Second, 20*time.Millisecond, "degraded→healthy edge must fire once")
+	require.True(t, h.IsHealthy())
+
+	// 已健康后的重复心跳保持沉默。
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	require.Equal(t, int32(1), fired.Load())
+}
+
+// TestHealthTracker_OnRecoveryGenuineOfflineGap : 真离线缺口（超过 timeout
+// 无心跳）后的首个健康心跳触发一次补偿——这正是离线补偿的存在意义；
+// 恢复后的下一拍不再触发。
+func TestHealthTracker_OnRecoveryGenuineOfflineGap(t *testing.T) {
+	h := NewHealthTracker(1) // 1s timeout——间隔超过它即视为离线缺口
+
+	var fired atomic.Int32
+	h.SetOnRecovery(func() { fired.Add(1) })
+
+	// 首拍：全新 tracker 视为「缺口后恢复」，触发一次（重启后补偿语义）。
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	require.Eventually(t, func() bool { return fired.Load() == 1 },
+		2*time.Second, 20*time.Millisecond)
+
+	// 制造离线缺口：让 lastSeen 老化超过 timeout，再收健康心跳。
+	time.Sleep(1100 * time.Millisecond)
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	require.Eventually(t, func() bool { return fired.Load() == 2 },
+		2*time.Second, 20*time.Millisecond, "healthy beat after an outage gap must fire once")
+
+	// 恢复后的下一拍：不再触发。
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	require.Equal(t, int32(2), fired.Load())
+}
+
+// TestHealthTracker_OnRecovery_FirstBeatDegraded : 全新 tracker 的首拍若
+// 自身 degraded，不触发补偿——没有「恢复」可言。
+func TestHealthTracker_OnRecovery_FirstBeatDegraded(t *testing.T) {
+	h := NewHealthTracker(60)
+
+	var fired atomic.Int32
+	h.SetOnRecovery(func() { fired.Add(1) })
+
+	h.RecordHeartbeat(HeartbeatStatus{Status: "degraded"})
+	require.Equal(t, int32(0), fired.Load())
+	require.False(t, h.IsHealthy())
 }
