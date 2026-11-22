@@ -14,11 +14,25 @@ describe('gbSiblings (dual-spectrum channels of one GB device)', () => {
     expect(got.map((c) => c.id)).toEqual(['gb-2']);
   });
 
-  it('returns both siblings for a three-channel device and none for a lone channel', () => {
+  it('pairs only across the thermal boundary and none for a lone channel', () => {
+    // One device, three channels: only thermal↔non-thermal pairs count.
+    // Two plain channels of the same device (duplicate registrations of one
+    // channel, ordinary multi-channel devices) must NOT pair — that is how a
+    // plain bullet camera once mis-rendered the thermal switch chip.
     const a = gb('gb-a', 'dev-1');
     const b = gb('gb-b', 'dev-1', 'thermal');
     const c = gb('gb-c', 'dev-1');
-    expect(gbSiblings(a, [a, b, c]).map((x) => x.id).sort()).toEqual(['gb-b', 'gb-c']);
+    expect(gbSiblings(a, [a, b, c]).map((x) => x.id)).toEqual(['gb-b']);
+    expect(gbSiblings(c, [a, b, c]).map((x) => x.id)).toEqual(['gb-b']);
+    expect(gbSiblings(b, [a, b, c]).map((x) => x.id).sort()).toEqual(['gb-a', 'gb-c']);
+    // Duplicate registration of the same channel, neither side thermal.
+    const dup1 = gb('gb-dup1', 'dev-dup');
+    const dup2 = gb('gb-dup2', 'dev-dup');
+    expect(gbSiblings(dup1, [dup1, dup2])).toEqual([]);
+    // Two thermal channels of one device are equally not a spectrum pair.
+    const t1 = gb('gb-t1', 'dev-t', 'thermal');
+    const t2 = gb('gb-t2', 'dev-t', 'thermal');
+    expect(gbSiblings(t1, [t1, t2])).toEqual([]);
     expect(gbSiblings(gb('gb-x', 'dev-2'), [a, b, c])).toEqual([]);
   });
 
@@ -37,9 +51,16 @@ describe('gbSiblings (dual-spectrum channels of one GB device)', () => {
     const a = { ...gb('gb-a', 'dev-a'), spectrum_group: '' } as Camera;
     const b = { ...gb('gb-b', 'dev-b'), spectrum_group: '' } as Camera;
     expect(gbSiblings(a, [a, b])).toEqual([]);
+    // The explicit group links two registrations of one rig; the pairing
+    // still has to span the thermal boundary — the grouped channel without
+    // imaging_type is the visible side.
     const noBinding = { id: 'gb-c', protocol: 'gb28181', spectrum_group: 'rig-7f' } as unknown as Camera;
-    const linked = { id: 'gb-d', protocol: 'gb28181', spectrum_group: 'rig-7f' } as unknown as Camera;
+    const linked = { ...gb('gb-d', 'dev-d', 'thermal'), spectrum_group: 'rig-7f' } as unknown as Camera;
     expect(gbSiblings(noBinding, [noBinding, linked]).map((c) => c.id)).toEqual(['gb-d']);
+    // Two plain channels sharing a group (mis-set) do not pair either.
+    const plain1 = { ...gb('gb-p1', 'dev-p1'), spectrum_group: 'rig-x' } as Camera;
+    const plain2 = { ...gb('gb-p2', 'dev-p2'), spectrum_group: 'rig-x' } as Camera;
+    expect(gbSiblings(plain1, [plain1, plain2])).toEqual([]);
   });
 
   it('ignores non-GB cameras and a camera without a gb28181 binding', () => {

@@ -13,14 +13,27 @@ import type { Camera } from './api/cameras';
  * cameras) pairs the same way. Returns the other channels of the same
  * physical device, so the live view can offer a one-click "switch to
  * thermal/visible channel" chip and the dual-pane view.
+ *
+ * A spectrum pair always spans exactly one thermal channel — two plain
+ * channels sharing a device_id are NOT a pair (duplicate registrations of
+ * one channel, or an ordinary multi-channel device) and would otherwise
+ * render "switch to thermal" chips between ordinary cameras; the same guard
+ * applies to the explicit group, which is only meaningful as a
+ * thermal↔visible link. Both real topologies pass: the one-device-two-
+ * channel rig has imaging_type on the thermal side, and the two-registration
+ * rig sets it alongside spectrum_group.
  */
+const isThermalChannel = (c: Camera): boolean => c?.imaging_type === 'thermal';
+
 export function gbSiblings(camera: Camera, cameras: Camera[] | null | undefined): Camera[] {
   const deviceId = camera?.protocol === 'gb28181' ? camera?.gb28181?.device_id : undefined;
   const group = camera?.spectrum_group?.trim();
   if ((!deviceId && !group) || !cameras) return [];
+  const thermal = isThermalChannel(camera);
   return cameras.filter(
     (c) =>
       c.id !== camera.id &&
+      isThermalChannel(c) !== thermal &&
       ((deviceId && c.protocol === 'gb28181' && c.gb28181?.device_id === deviceId) ||
         (group && c.spectrum_group?.trim() === group))
   );
