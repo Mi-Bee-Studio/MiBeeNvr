@@ -580,4 +580,6 @@ func TestCoordinatorInstancesStatus(t *testing.T) {
 	require.True(t, st[0].Healthy)
 	require.NotNil(t, st[0].LastSeen)
 	require.Equal(t, "cuda", st[0].Device)
+	// 原始 status 直通暴露：healthy 布尔是推导值，分歧排查要看自报值。
+	require.Equal(t, "healthy", st[0].HeartbeatStatus)
 }

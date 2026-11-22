@@ -312,6 +312,10 @@ type InstanceStatus struct {
 	SkipCameras []string       `json:"skip_cameras,omitempty"`
 	Metrics     *VisionMetrics `json:"metrics,omitempty"`
 	MarkedDrops int64          `json:"drops_marked_total,omitempty"`
+	// 消费者心跳自报的原始 status（"healthy"/"degraded"/…）——healthy
+	// 布尔由它 + 新鲜度推导，排查「实例自称健康但 NVR 判不健康」类分歧
+	// 时需要看到原始值而不是只有推导结果。
+	HeartbeatStatus string `json:"heartbeat_status,omitempty"`
 	// 推送熔断观测(#737-A):closed/open/half-open + 连续失败数。
 	PushState string `json:"push_state,omitempty"`
 	PushFails int    `json:"push_fails,omitempty"`
@@ -336,6 +340,7 @@ func (c *Coordinator) InstancesStatus() []InstanceStatus {
 			st.LastSeen = &t
 		}
 		st.Device = hs.Device
+		st.HeartbeatStatus = hs.Status
 		st.QueueDepth = hs.QueueDepth
 		st.Processed = hs.ProcessedCount
 		st.SkipCameras = hs.SkipCameras

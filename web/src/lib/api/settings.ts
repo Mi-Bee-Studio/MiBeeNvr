@@ -644,6 +644,8 @@ export interface VisionInstanceStatus {
   skip_cameras?: string[];
   metrics?: VisionMetrics;
   drops_marked_total?: number;
+  /** Raw heartbeat status reported by the consumer ("healthy"/"degraded"/…). */
+  heartbeat_status?: string;
 }
 
 export async function getVisionStatus(signal?: AbortSignal): Promise<VisionStatus> {
