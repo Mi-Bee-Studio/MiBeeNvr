@@ -25,6 +25,7 @@ type Metrics struct {
 	HLSActiveStreams             *prometheus.GaugeVec     // labels: camera_id
 	HLSSegmentSizeBytes          *prometheus.HistogramVec // labels: camera_id
 	HLSIdleEvictions             *prometheus.CounterVec   // labels: camera_id
+	HLSRetiredMuxerServes        *prometheus.CounterVec   // labels: camera_id
 	GB35114AUVerifyFailures      *prometheus.CounterVec   // labels: channel_id
 	WebRTCActivePeers            *prometheus.GaugeVec     // labels: camera_id
 	WebRTCFramesSent             *prometheus.CounterVec   // labels: camera_id
@@ -266,6 +267,10 @@ func NewMetrics() *Metrics {
 	hlsIdleEvictions := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_hls_idle_evictions_total",
 		Help: "Total HLS streams evicted due to idle timeout, partitioned by camera.",
+	}, []string{"camera_id"})
+	hlsRetiredMuxerServes := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_hls_retired_muxer_serves_total",
+		Help: "Total HLS requests answered from a muxer retired by write-error recovery (pre-rebuild playlist names), partitioned by camera. Sustained nonzero growth after a write-error burst means clients were still holding the pre-rebuild playlist.",
 	}, []string{"camera_id"})
 	gb35114AUVerifyFailures := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_gb35114_au_verify_failures_total",
@@ -743,6 +748,7 @@ func NewMetrics() *Metrics {
 		hlsActiveStreams,
 		hlsSegmentSizeBytes,
 		hlsIdleEvictions,
+		hlsRetiredMuxerServes,
 		gb35114AUVerifyFailures,
 		webrtcActivePeers,
 		webrtcFramesSent,
@@ -866,6 +872,7 @@ func NewMetrics() *Metrics {
 		HLSActiveStreams:               hlsActiveStreams,
 		HLSSegmentSizeBytes:            hlsSegmentSizeBytes,
 		HLSIdleEvictions:               hlsIdleEvictions,
+		HLSRetiredMuxerServes:          hlsRetiredMuxerServes,
 		GB35114AUVerifyFailures:        gb35114AUVerifyFailures,
 		WebRTCActivePeers:              webrtcActivePeers,
 		WebRTCFramesSent:               webrtcFramesSent,

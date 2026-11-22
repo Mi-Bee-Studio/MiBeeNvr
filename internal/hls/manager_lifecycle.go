@@ -141,6 +141,9 @@ func (m *Manager) stopStreamLocked(cameraID string) func() {
 			entry.mux = nil
 		}
 		entry.mu.Unlock()
+		// Retired-muxer stashes outlive writeLoop (joined above) but must not
+		// outlive the entry — close them before the directory goes away.
+		closeRetiredMuxers(entry)
 		_ = os.RemoveAll(entry.dirPath)
 	}
 }
@@ -312,9 +315,16 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	entry.mu.Unlock()
 
 	if mux == nil {
-		// Muxer destroyed by write-error recovery and not yet recreated.
-		// Returning false lets the caller (HTTP handler) respond 404 so the
-		// frontend retries; the stream re-initialises on next start.
+		// Muxer retired by write-error recovery and not yet rebuilt (waits
+		// for the next IDR). The retired-muxer stash keeps pre-error names
+		// resolvable, so a polling client only notices the recovery as a
+		// briefly frozen window instead of a hard failure.
+		if serveRetiredMuxers(m, cameraID, entry, w, r) {
+			return true
+		}
+		// Nothing resolvable — returning false lets the caller (HTTP handler)
+		// respond 503 so the frontend retries; the stream re-initialises on
+		// next start.
 		hlsLogger.Warn("HLS Handle: muxer not initialized", "camera_id", cameraID)
 		return false
 	}
@@ -365,6 +375,14 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 		// requested file name is not one it serves. gohlslib silently
 		// no-ops here, which used to leak an empty 200 to the client (#772).
 		if !zw.wrote {
+			// After a rebuild (write-error recovery) the muxer's random
+			// filename prefix changes, so every name advertised by a
+			// pre-rebuild playlist is orphaned — a naive client treats the
+			// 404 as fatal. Replay against the retired-muxer stash (kept
+			// alive for a grace window) before giving up.
+			if serveRetiredMuxers(m, cameraID, entry, w, r) {
+				return true
+			}
 			http.Error(w, "unknown HLS resource", http.StatusNotFound)
 		}
 		return true

@@ -91,6 +91,11 @@ type streamEntry struct {
 	// Set by SubscribeToHub; compared by the sub-stream recycler (#513) to
 	// decide whether this entry still belongs to a recycled pull generation.
 	hub *streamhub.StreamHub
+	// prevMuxers holds muxers retired by write-error recovery, still serving
+	// their pre-rebuild names for legacyMuxerGrace (see legacy_muxers.go).
+	// Guarded by entry.mu: written from writeLoop (handleWriteError / reap),
+	// read from Handle on HTTP goroutines.
+	prevMuxers []*legacyMuxer
 	// wg tracks the writeLoop + idleWatchdog goroutines so stopStreamLocked
 	// can join them before returning. Without this, the goroutines briefly
 	// outlive the entry (they touch entry.mux / entry.dirPath), leaking
@@ -423,6 +428,9 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 					entry.consecutiveErrors = 0
 					entry.backoff = 0
 				}
+				// Retired-muxer grace stashes (write-error recovery) expire
+				// here on the healthy path — a cheap no-op while none exist.
+				reapRetiredMuxers(entry)
 				// Observe new segment file sizes for metrics
 				m.observeNewSegments(cameraID, entry)
 			}
@@ -555,12 +563,15 @@ func (m *Manager) handleWriteError(ctx context.Context, cameraID string, entry *
 		m.metrics.HLSMuxerRestarts.WithLabelValues(cameraID).Inc()
 	}
 
-	// Destroy old muxer so it will be recreated on next write
+	// Retire the old muxer instead of closing it: closing deletes its segment
+	// files from disk, which strands every client still requesting names from
+	// the pre-error playlist (the rebuild changes the muxer's random filename
+	// prefix). The stash keeps the old names resolvable during the write-error
+	// backoff and for a grace window after the rebuild; the muxer is rebuilt
+	// by rebuildMuxer when the next IDR frame arrives in writeLoop.
 	entry.mu.Lock()
-	// Destroy old muxer so it will be recreated on next write (rebuilt by
-	// rebuildMuxer when the next IDR frame arrives in writeLoop).
 	if entry.mux != nil {
-		entry.mux.Close()
+		stashRetiredMuxerLocked(entry, entry.mux)
 		entry.mux = nil
 	}
 	entry.track = nil
