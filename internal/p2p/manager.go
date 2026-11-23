@@ -145,6 +145,12 @@ type StatusSnapshot struct {
 	// = 优先级车道真实买到的量，prio(满载)−prio(轻载) = 控制面被媒体
 	// 面拖累的净量。nil = 尚无客户端隧道。
 	TunnelEcho *TunnelEchoObs `json:"tunnel_echo,omitempty"`
+
+	// ConfigError 是非空时表示链路**配置错误**（不是瞬时故障，重试不会
+	// 自愈）：当前唯一来源是身份端点被打到了只服务数据面的节点
+	// （identity plane moved）。此时 online 恒 false 且不应期望自动恢复，
+	// 运维需改 token_endpoint / server_url 指向身份权威端点。
+	ConfigError string `json:"config_error,omitempty"`
 }
 
 // TunnelEchoObs 一次 T2 隧道单跳 RTT 探测结果（双车道，#87）。
@@ -190,6 +196,12 @@ type Manager struct {
 	disconnectedAt atomic.Int64 // unix nano; 0 = 从未断线或已恢复
 	redial         chan struct{}
 	online         atomic.Bool
+
+	// configErr 持有最近一次**配置级**失败（当前唯一来源
+	// ErrIdentityPlaneMoved）。nil = 无配置错误；成功铸造即清空。
+	// 与普通瞬时失败分开：它进状态面的 config_error 字段，运维据此改
+	// 配置而不是等自愈。
+	configErr atomic.Pointer[error]
 
 	// 并发客户端记账：当前信令会话名下的活跃隧道（map 尺寸即活跃数）。
 	// 信令会话终结时整表换新——迟到的 OnClose 回调只碰旧表，无跨会话
@@ -347,7 +359,16 @@ func (m *Manager) Run(ctx context.Context) {
 
 		jwt, err := m.tokens.Mint(ctx)
 		if err != nil {
-			m.logger.Warn("token mint failed; backing off", "error", err)
+			// 配置错误（打错进程）与瞬时故障要分开呈现：前者重试不会
+			// 自愈，只刷日志并叠加平台限流计数，必须让运维在状态面看见。
+			if errors.Is(err, ErrIdentityPlaneMoved) {
+				m.configErr.Store(&err)
+				m.logger.Error("identity endpoint points at the data plane (config error, "+
+					"retrying will not help): point token_endpoint/server_url at the identity plane",
+					"error", err)
+			} else {
+				m.logger.Warn("token mint failed; backing off", "error", err)
+			}
 			if wait > 0 {
 				select {
 				case <-ctx.Done():
@@ -357,6 +378,7 @@ func (m *Manager) Run(ctx context.Context) {
 			}
 			continue
 		}
+		m.configErr.Store(nil)
 
 		err = m.runSession(ctx, jwt)
 		if errors.Is(err, errPlatformRejected) {
@@ -805,6 +827,11 @@ func (m *Manager) Status() StatusSnapshot {
 		NAT:                 m.natSnapshot(),
 		Relay:               relayStatusPtr(m.relay.snapshot()),
 		TunnelEcho:          m.tunnelEchoSnapshot(),
+	}
+	// 配置错误优先呈现：它解释了为什么 online=false，且不是自愈类故障，
+	// 运维看到它就该改 token_endpoint/server_url 而不是等自动恢复。
+	if pe := m.configErr.Load(); pe != nil && *pe != nil {
+		snap.ConfigError = (*pe).Error()
 	}
 	if pinned, reason := m.transportDecision(); pinned {
 		snap.TransportDecision, snap.DecisionReason = "relay", reason

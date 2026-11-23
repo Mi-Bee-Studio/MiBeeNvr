@@ -255,6 +255,14 @@ func postJSON(ctx context.Context, client *http.Client, url string, body any,
 	}
 	_ = json.Unmarshal(respBody, &e)
 
+	// 打错进程是部署配置错误，不是瞬时故障：先于通用错误映射判定，
+	// 免得它被归类成可重试的临时错误反复刷屏。服务端拆分后 /device/*
+	// 与 /api/enrollment/* 归身份面，数据面节点对这些路径答 503
+	// identity_plane_moved（过渡期旧 worker 答 worker_node_no_identity_plane）。
+	if isIdentityPlaneMovedBody(e.Error) || isIdentityPlaneMovedBody(string(respBody)) {
+		return ErrIdentityPlaneMoved
+	}
+
 	if resp.StatusCode >= 400 {
 		if resp.StatusCode == http.StatusUnauthorized && authErr != nil {
 			return authErr

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -27,6 +28,44 @@ var ErrMintBackoff = errors.New("p2p token mint backoff")
 // ErrRebindNeeded 表示设备身份（enrollment 引导）的 refresh 链已死且无
 // password 凭据可回退——用户需在 App 重新发起绑定（user-tenant-model §5）。
 var ErrRebindNeeded = errors.New("p2p device identity expired; rebind required")
+
+// ErrIdentityPlaneMoved 表示身份/商业端点被指到了只服务数据面的节点
+// （数据面），而非身份权威。服务端返回 HTTP 503 +
+// {"error":"identity_plane_moved: …"}，旧构建返回
+// "worker_node_no_identity_plane"。这是**部署配置错误**，不是瞬时故障：
+// 无限重试不会自愈，只会刷日志并叠加平台的限流计数，因此 Mint 对该类
+// 错误直接短路（不进入重试节流循环），由状态面暴露给运维改配置。
+var ErrIdentityPlaneMoved = errors.New("p2p identity plane moved: endpoint must point at the identity plane, not the data plane")
+
+// identityPlaneMovedMarkers 是"打错进程"错误体里的稳定标记。新串是
+// 服务端契约，旧串是过渡期 worker 构建仍在返回的形态——两者都要认，
+// 否则 worker 升级前后行为不一致。
+var identityPlaneMovedMarkers = []string{
+	"identity_plane_moved",
+	"worker_node_no_identity_plane",
+}
+
+// isIdentityPlaneMovedBody 报告错误体是否命中"打错进程"标记。
+func isIdentityPlaneMovedBody(body string) bool {
+	for _, m := range identityPlaneMovedMarkers {
+		if strings.Contains(body, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isBareNodeBanner 识别数据面节点的纯文本 404 标识（例如
+// "MiBee P2P node (bj-temp)"）：短、无 JSON 结构、以节点前缀开头。
+// 过渡期旧 worker 对身份路径就是这样答的——没有 error 字段可判，
+// 只能靠形态识别，避免把部署配置错误当成可重试的瞬时故障。
+func isBareNodeBanner(body []byte) bool {
+	s := strings.TrimSpace(string(body))
+	if s == "" || len(s) > 200 {
+		return false
+	}
+	return strings.HasPrefix(s, "MiBee P2P node")
+}
 
 const defaultMinMintInterval = 30 * time.Second
 
@@ -179,8 +218,24 @@ func (t *TokenManager) grant(ctx context.Context, form url.Values) (*tokenRespon
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read token response (HTTP %d): %w", resp.StatusCode, err)
+	}
+	// 打错进程的两种现场都要认：新版数据面节点对身份端点答 503
+	// identity_plane_moved；过渡期旧 worker 连 /oidc/token 都没有，
+	// 直接 404 一个纯文本节点标识。两者都是部署配置错误——重试无意义。
+	if isIdentityPlaneMovedBody(string(body)) {
+		return nil, ErrIdentityPlaneMoved
+	}
+	if resp.StatusCode == http.StatusNotFound && isBareNodeBanner(body) {
+		return nil, fmt.Errorf("%w (token endpoint %s answered 404 with a node banner — "+
+			"token_endpoint/server_url likely points at a data-plane node)",
+			ErrIdentityPlaneMoved, t.endpoint)
+	}
+
 	var tr tokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+	if err := json.Unmarshal(body, &tr); err != nil {
 		return nil, fmt.Errorf("decode token response (HTTP %d): %w", resp.StatusCode, err)
 	}
 	if resp.StatusCode != http.StatusOK || tr.Error != "" || tr.AccessToken == "" {

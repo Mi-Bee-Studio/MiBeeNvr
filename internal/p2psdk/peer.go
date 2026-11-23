@@ -99,8 +99,8 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 			// host circuit open — deliberate skip, not a failure
 		case err == nil:
 			s.relayClient = s.relayIdentity
-			s.relayIdentity.OnFatal(s.handleRelayFatal)
-			s.relayIdentity.OnPeerGone(s.handleRelayPeerGone)
+			s.relayIdentity.OnFatal(s.relayFatalHook(s.relayIdentity))
+			s.relayIdentity.OnPeerGone(s.relayPeerGoneHook(s.relayIdentity))
 		default:
 			// failure already logged + reported inside connectRelayClient
 		}
@@ -235,6 +235,13 @@ type Session struct {
 	// becomes relayClient (identity == routing key, always); on failure the
 	// identity survives for the next attempt. See NewClientWithIdentity.
 	relayIdentity *relay.Client
+	// relayRebuilding is the single-flight gate for rebuildRelayClient: one
+	// rebuild at a time per signaling session. Without it every superseded
+	// client records its own fatal and spawns its own ladder — N concurrent
+	// rebuilds re-dial the SAME identity key, each one displacing the last
+	// server-side, which is a self-sustaining takeover loop (production
+	// 2026-11-23: 5s/round ×3000+, remote access down).
+	relayRebuilding atomic.Bool
 	// Callbacks (set by the user; OnSession/OnDataChannel/OnReject are read
 	// live at event time, so they may be assigned any time before the event
 	// fires — including after Connect() returns via SetOnDataChannel)
@@ -432,6 +439,42 @@ func (s *Session) getP2P(sessionID string) *p2pSession {
 	return s.peers[sessionID]
 }
 
+// relayFatalHook returns the OnFatal callback for ONE relay client. A fatal
+// from a client that is no longer the session's current relayClient is
+// stale: it was superseded by a rebuild or a cross-node repoint, and its
+// death must not start another rebuild. Without this ownership check the
+// server's same-key takeover ("relay connection replaced by re-auth", which
+// closes the PREVIOUS connection when the same identity re-registers) turns
+// every completed rebuild into the trigger for the next one — a closed loop
+// that never converges (production incident, 2026-11-23).
+func (s *Session) relayFatalHook(rc *relay.Client) func(error) {
+	return func(err error) {
+		s.mu.RLock()
+		current := s.relayClient
+		s.mu.RUnlock()
+		if current != rc {
+			s.logger.Debug("stale relay client died after being superseded — not rebuilding",
+				errKey, err)
+			return
+		}
+		s.handleRelayFatal(err)
+	}
+}
+
+// relayPeerGoneHook is relayFatalHook's #117 counterpart: a superseded
+// client's routing-loss notifications are equally stale.
+func (s *Session) relayPeerGoneHook(rc *relay.Client) func([32]byte, byte) {
+	return func(peer [32]byte, reason byte) {
+		s.mu.RLock()
+		current := s.relayClient
+		s.mu.RUnlock()
+		if current != rc {
+			return
+		}
+		s.handleRelayPeerGone(peer, reason)
+	}
+}
+
 // handleRelayFatal reacts to the session-level relay WebSocket dying (read
 // timeout / pong starvation / write failure — relay.Client liveness). Per
 // the relay contract ("relay disconnect → session-level complete rebuild"):
@@ -575,11 +618,22 @@ func (s *Session) relayIntent() bool {
 // New sessions snapshot the new client at creation.
 // A restarting cause (#106-B) shortens the FIRST attempt to the server's
 // retry hint (+ jitter, clamped) — the server said it will be back shortly.
+//
+// Single-flight: at most one rebuild runs per session. Concurrent ladders
+// would each dial the SAME identity key, and the relay server evicts the
+// previous registration on a same-key re-auth — so the fastest ladder kills
+// the connection a slower one just built, and every eviction feeds another
+// fatal. See relayFatalHook for the matching ownership check.
 func (s *Session) rebuildRelayClient(cause error) {
 	w := s.welcome
 	if w == nil || w.RelayURL == "" {
 		return
 	}
+	if !s.relayRebuilding.CompareAndSwap(false, true) {
+		s.logger.Debug("relay rebuild already in flight — coalescing")
+		return
+	}
+	defer s.relayRebuilding.Store(false)
 	firstDelay := 5 * time.Second
 	if hint, ok := relay.RetryHint(cause); ok {
 		firstDelay = hint + jitterUpTo(750*time.Millisecond)
@@ -617,8 +671,8 @@ func (s *Session) rebuildRelayClient(cause error) {
 				attemptKey, attempt, errorKey, err)
 			continue
 		}
-		rc.OnFatal(s.handleRelayFatal)
-		rc.OnPeerGone(s.handleRelayPeerGone)
+		rc.OnFatal(s.relayFatalHook(rc))
+		rc.OnPeerGone(s.relayPeerGoneHook(rc))
 		s.mu.Lock()
 		s.relayClient = rc
 		s.mu.Unlock()

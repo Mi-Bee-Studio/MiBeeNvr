@@ -431,9 +431,10 @@ func (s *Session) repointRelay(serverURL, serverPubKeyHex string) {
 	// death never triggers a rebuild and the session keeps announcing a
 	// dead key (silent blackhole, no redial); without OnPeerGone it misses
 	// both routing-loss notifications and the server's asymmetric-leg
-	// self-notify.
-	rc.OnFatal(s.handleRelayFatal)
-	rc.OnPeerGone(s.handleRelayPeerGone)
+	// self-notify. Ownership-checked: once a later repoint
+	// supersedes this client, its death is stale and must not rebuild.
+	rc.OnFatal(s.relayFatalHook(rc))
+	rc.OnPeerGone(s.relayPeerGoneHook(rc))
 	s.mu.Lock()
 	s.relayClient = rc
 	s.mu.Unlock()
