@@ -181,9 +181,24 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 	serverURL := sc.cfg.ServerURL
 	// #48 nearest-node selection: only when discovery is configured, and
 	// only as a PREFERRED endpoint — every failure path keeps ServerURL.
+	//
+	// DNS plan A: when the platform publishes a signal_ip we dial that address
+	// directly and present the region domain as TLS SNI, so a node needs no
+	// per-node DNS record and still gets a valid certificate.
 	if sc.cfg.NodesURL != "" {
-		if best := DiscoverBestNode(ctx, sc.cfg.NodesURL, sc.logger); best != "" {
-			serverURL = best
+		if ep := DiscoverBestEndpoint(ctx, sc.cfg.NodesURL, sc.logger); ep.URL != "" {
+			serverURL = ep.URL
+			if ep.DialURL != "" && ep.DialURL != ep.URL {
+				if tlsCfg, tlsErr := withServerName(sc.cfg.TLSConfig, ep.ServerName); tlsErr == nil {
+					dialer.TLSClientConfig = tlsCfg
+					serverURL = ep.DialURL
+				} else {
+					sc.logger.WarnContext(ctx, "node discovery: SNI override rejected, using advertised URL",
+						serverNameKey, ep.ServerName, errKey, tlsErr)
+				}
+			} else if tlsCfg, tlsErr := withServerName(sc.cfg.TLSConfig, ep.ServerName); tlsErr == nil {
+				dialer.TLSClientConfig = tlsCfg
+			}
 		}
 	}
 
@@ -191,6 +206,9 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 	if err != nil {
 		// The discovered node may be freshly dead (probe raced): one
 		// straight retry on the configured URL before giving the rung up.
+		// Restore the caller's TLS config — the discovered host's SNI is
+		// meaningless for the configured fallback.
+		dialer.TLSClientConfig = sc.cfg.TLSConfig
 		conn, resp, err = dialer.DialContext(ctx, sc.cfg.ServerURL, http.Header{})
 		if err != nil {
 			return nil, fmt.Errorf("dial signaling: %w", err)
@@ -206,13 +224,15 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 
 	// Send hello — the JWT is minted fresh when TokenFunc is set (#66):
 	// server tokens are single-use, so the static config JWT is only the
-	// first-connection credential.
+	// first-connection credential. Signature and JWT MUST come from the
+	// same token (deviceHelloSignature derives from this exact string).
+	helloJWT := sc.currentJWT()
 	hello := Hello{
 		ProductID: sc.cfg.ProductID,
 		PeerID:    sc.cfg.PeerID,
 		Role:      sc.cfg.Role,
-		JWT:       sc.currentJWT(),
-		Signature: sc.deviceHelloSignature(),
+		JWT:       helloJWT,
+		Signature: sc.deviceHelloSignature(helloJWT),
 	}
 	helloData, err := Marshal(MessageTypeHello, hello)
 	if err != nil {
@@ -481,12 +501,13 @@ func (sc *signalingClient) helloReconnect(conn *websocket.Conn) bool {
 		sc.logger.Warn("reconnect ladder abandoned: auth-class close")
 		return true
 	}
+	helloJWT := sc.currentJWT()
 	hello := Hello{
 		ProductID: sc.cfg.ProductID,
 		PeerID:    sc.cfg.PeerID,
 		Role:      sc.cfg.Role,
-		JWT:       sc.currentJWT(),
-		Signature: sc.deviceHelloSignature(),
+		JWT:       helloJWT,
+		Signature: sc.deviceHelloSignature(helloJWT),
 	}
 	helloData, err := Marshal(MessageTypeHello, hello)
 	if err != nil {
@@ -661,11 +682,19 @@ func (sc *signalingClient) noteAuthClassClose(cls authCloseClass) bool {
 // maxAuthRemintFailures bounds mintable-verdict re-mint retries.
 const maxAuthRemintFailures = 3
 
-func (sc *signalingClient) deviceHelloSignature() string {
+// deviceHelloSignature signs "<sub>:<jti>" OF THE TOKEN ACTUALLY CARRIED in
+// the hello. It must be derived from the same token the JWT field carries —
+// never read cfg.JWT directly: with TokenFunc set (#66) every hello mints a
+// fresh single-use token while cfg.JWT keeps the stale static one, so a
+// signature over cfg.JWT verifiles against the wrong jti server-side and the
+// device is rejected with device_identity_failed (the 2026-11-12 nvr-c2cbab
+// pattern: every TokenFunc-minted hello refused, only the rare mint-failure
+// fallback to the static token connected).
+func (sc *signalingClient) deviceHelloSignature(token string) string {
 	if sc.deviceKey == nil || sc.cfg.Role != "device" {
 		return ""
 	}
-	sub, jti, err := jwtSubjectAndJTI(sc.cfg.JWT)
+	sub, jti, err := jwtSubjectAndJTI(token)
 	if err != nil {
 		sc.logger.Warn("device hello signature skipped: unreadable JWT payload", errorKey, err)
 		return ""

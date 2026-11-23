@@ -11,6 +11,9 @@ package peer
 //     completed rebuild immediately triggers the next one.
 //  2. relayRebuilding — at most one ladder in flight, so concurrent fatals
 //     cannot stack rebuilds that evict each other's work.
+//  3. relay.IsReplaced — the server's dedicated takeover close (4012) is
+//     recognized as "a newer registration of ours already owns the key", so
+//     even a client that somehow misses the ownership check does not rebuild.
 //
 // Both tests observe the RELAY DIAL GATE (called once per ladder entry, before
 // any sleep), which makes "did a rebuild start?" directly countable without
@@ -87,10 +90,31 @@ func TestCurrentRelayFatalStillRebuilds(t *testing.T) {
 
 	cur := relay.NewClient()
 	s.relayClient = cur
+	// A plain transport error (NOT a takeover close): the ladder must run.
+	// Note the gate is consulted at ladder entry, before the first backoff
+	// sleep, so this returns quickly.
 	s.relayFatalHook(cur)(errors.New("relay read: i/o timeout"))
 
-	if !waitFor(t, 500*time.Millisecond, func() bool { return gate.Load() >= 1 }) {
+	if !waitFor(t, 2*time.Second, func() bool { return gate.Load() >= 1 }) {
 		t.Fatal("current client's fatal did not start a rebuild")
+	}
+}
+
+// TestReplacedErrorNeverRebuilds pins guard 3: the server's dedicated
+// takeover close (4012) means a NEWER registration of ours already owns the
+// key. Even for the CURRENT client this must not rebuild — the transport is
+// healthy, only this older socket was displaced.
+func TestReplacedErrorNeverRebuilds(t *testing.T) {
+	s := loopTestSession()
+	gate := countGate(s)
+
+	cur := relay.NewClient()
+	s.relayClient = cur
+
+	s.handleRelayFatal(&relay.ReplacedError{})
+
+	if waitFor(t, 500*time.Millisecond, func() bool { return gate.Load() > 0 }) {
+		t.Fatalf("takeover close started %d rebuild ladder(s), want 0", gate.Load())
 	}
 }
 

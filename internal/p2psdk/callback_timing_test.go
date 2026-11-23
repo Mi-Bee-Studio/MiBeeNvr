@@ -13,7 +13,7 @@ import (
 // read-through semantics: OnDataChannel assigned AFTER Connect() returns but
 // BEFORE the DataChannel opens must still fire. It used to be silently lost
 // because Session.Connect snapshotted the (then nil) callback into the p2p
-// session — the mibee-peer forward command was bitten by exactly this window.
+// session — the mibee-cli forward command was bitten by exactly this window.
 //
 // Determinism: the mock holds connect_accept delivery for connectAcceptDelay,
 // so the DataChannel cannot open before that elapses; the test assigns the

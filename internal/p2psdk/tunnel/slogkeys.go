@@ -39,6 +39,9 @@ const serviceKey = "service"
 // streamIDKey is the slog key "stream_id".
 const streamIDKey = "stream_id"
 
+// targetBpsKey is the slog key "target_bps".
+const targetBpsKey = "target_bps"
+
 // streamKey is the slog key "stream".
 const streamKey = "stream"
 

@@ -328,16 +328,39 @@ func (t *Tunnel) sendMsg(msg TunnelMessage) error {
 }
 
 // isTunnelLifecycleType selects the frames that may ride the lossy ctrl
-// channel: stream lifecycle + the E2EE ack (echo frames keep their own
-// measured-lane semantics, see echo.go).
+// channel: stream lifecycle, the E2EE ack, and the latest-wins bitrate
+// target (#134① — losing one costs an update cycle, not correctness; echo
+// frames keep their own measured-lane semantics, see echo.go).
 func isTunnelLifecycleType(typ TunnelMessageType) bool {
 	switch typ {
-	case TunnelMessageTypeOpen, TunnelMessageTypeClose, TunnelMessageTypeE2EEAck:
+	case TunnelMessageTypeOpen, TunnelMessageTypeClose, TunnelMessageTypeE2EEAck,
+		TunnelMessageTypeBitrate:
 		return true
 	case TunnelMessageTypeData, TunnelMessageTypeEcho, TunnelMessageTypeEchoResp:
 		return false
 	}
 	return false
+}
+
+// handleBitrate delivers a peer's congestion-control target to the
+// registered OnTargetBitrate handler (#134①). Frames arriving before
+// registration (or without a handler) are dropped with a debug line —
+// the stream of targets is continuous, so the next frame heals it.
+func (t *Tunnel) handleBitrate(payload string) {
+	var b TunnelBitrate
+	if err := json.Unmarshal([]byte(payload), &b); err != nil {
+		t.logger.Warn("invalid bitrate frame", errorKey, err)
+		return
+	}
+	t.mu.Lock()
+	cb := t.onBitrate
+	t.mu.Unlock()
+	if cb == nil {
+		t.logger.Debug("bitrate frame without handler",
+			streamIDKey, b.StreamID, targetBpsKey, b.TargetBps)
+		return
+	}
+	cb(b)
 }
 
 // sendEgress routes one already-marshaled tunnel message, honoring the

@@ -9,7 +9,7 @@ import (
 )
 
 // serverAuthCloseReasons is the source-of-truth copy of the signal server's
-// auth-class hello rejection reasons (signaling-server repo, internal/signal/
+// auth-class hello rejection reasons (the signaling server's internal/signal/
 // handler.go: classifyTokenRejection → token_invalid / token_expired /
 // token_replayed; verifyHello → authentication_failed / subject_revoked).
 // The SDK cannot import the internal package, so this test pins the pairing:

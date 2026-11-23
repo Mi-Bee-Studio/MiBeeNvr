@@ -260,7 +260,8 @@ func (g *UPnPGateway) soap(action string, inner string) (string, error) {
 	defer resp.Body.Close() //nolint:errcheck // probe teardown
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return string(body), fmt.Errorf("upnp SOAP %s → HTTP %d: %s", action, resp.StatusCode, upnpErrorCode(string(body)))
+		return string(body), fmt.Errorf("upnp SOAP %s → HTTP %d: %s",
+			action, resp.StatusCode, upnpErrorCode(string(body)))
 	}
 	return string(body), nil
 }

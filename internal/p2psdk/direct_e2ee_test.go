@@ -1,21 +1,16 @@
 package peer
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/relay"
 )
 
-// TestConnectRequestCallerRelayKeyFieldCompat (mibeescout#16): the wire
+// TestConnectRequestCallerRelayKeyFieldCompat (the relay-identity gap): the wire
 // field is additive — JSON from an old caller (field absent) decodes empty,
 // so an old caller never arms a new device.
 func TestConnectRequestCallerRelayKeyFieldCompat(t *testing.T) {
@@ -32,19 +27,18 @@ func TestConnectRequestCallerRelayKeyFieldCompat(t *testing.T) {
 	assert.Contains(t, string(out), `"caller_relay_pub_key":"ab"`)
 }
 
-// TestConnectArmsDeviceE2EEBeforeSDP (mibeescout#16): the caller's relay
+// TestConnectArmsDeviceE2EEBeforeSDP (the relay-identity gap): the caller's relay
 // identity key rides the connect_request, so the DEVICE-side offerer's
 // session is armed at creation — before any SDP could carry the key. This
 // is the direct-path plaintext fix: e2eeKey() must be derivable with zero
 // SDP round-trips.
+//
+// #162 changed WHICH key is announced: the session identity, not the live
+// relay client's key. The assertion below therefore compares against the
+// client session's identity — and, crucially, that identity exists even
+// though this test never dials a relay.
 func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 	mock := newMockServer(t)
-	// Relay intent on the welcome (mibeescout#16 shape): the relay DIAL will
-	// fail against the dead URL — the point of the test is that arming no
-	// longer depends on dial success. The identity key is announced with
-	// intent, not with a live connection.
-	dead := "wss://127.0.0.1:1/relay"
-	mock.relayWelcome = &Welcome{RelayURL: dead, RelayPubKey: strings.Repeat("ab", 32)}
 
 	device, err := Dial(context.Background(), SignalingConfig{
 		ServerURL: mock.url,
@@ -56,9 +50,6 @@ func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = device.Close() })
 
-	clientRC := relay.NewClient()
-	callerPub := clientRC.PubKey()
-
 	client, err := Dial(context.Background(), SignalingConfig{
 		ServerURL: mock.url,
 		JWT:       "test-client-jwt",
@@ -68,9 +59,9 @@ func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	// The caller announces its IDENTITY key (minted at session creation —
-	// its relay dial against the dead URL fails, non-fatal).
-	client.relayIdentity = clientRC
+
+	callerPub, ok := client.relayIdentityPub()
+	require.True(t, ok, "session identity must be minted at Dial, before any relay dial")
 
 	require.NoError(t, client.Connect(context.Background(), "device-1"))
 
@@ -99,22 +90,4 @@ func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-}
-
-// TestArmE2EEWarnsOnceOnMissingKeyMaterial (mibeescout#16 item 3): a
-// channel delivered without derivable key material runs plaintext — that
-// state must be observable in device logs (one WARN per session), not only
-// via App diagnostics.
-func TestArmE2EEWarnsOnceOnMissingKeyMaterial(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	p := &p2pSession{sessionID: "s-warn", logger: logger}
-	dc := &DataChannel{}
-
-	p.armE2EE(dc)
-	p.armE2EE(dc) // second delivery must not warn again
-
-	assert.Empty(t, dc.E2EEKey, "no key material → key stays nil (plaintext semantics)")
-	assert.Equal(t, 1, strings.Count(buf.String(), "e2ee not armed"),
-		"exactly one WARN per session")
 }

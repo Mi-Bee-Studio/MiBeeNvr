@@ -79,47 +79,6 @@ func TestDiscoverBestNodePrefersLowLatencyBucket(t *testing.T) {
 	assert.Equal(t, before, f.fastHits.Load(), "TTL cache must absorb repeat discovery")
 }
 
-// TestFetchNodeListAcceptsWrapperShape: the platform's pre-spec server
-// wrapped the list in {"nodes":[…]} (live observation 2026-11-10); the
-// tolerant decoder must unwrap it, and reject shapes that are neither.
-func TestFetchNodeListAcceptsWrapperShape(t *testing.T) {
-	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(fast.Close)
-
-	for name, payload := range map[string]string{
-		"bare array (spec)": `[
-			{"node_id":"a","signal_url":"ws://` + fast.Listener.Addr().String() + `/signal","online":true}
-		]`,
-		"wrapped object (pre-spec server)": `{"nodes":[
-			{"node_id":"a","signal_url":"ws://` + fast.Listener.Addr().String() + `/signal","online":true}
-		]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(payload))
-			}))
-			t.Cleanup(srv.Close)
-			nodes, err := fetchNodeList(context.Background(), srv.URL)
-			require.NoError(t, err)
-			require.Len(t, nodes, 1)
-			assert.Equal(t, "a", nodes[0].NodeID)
-		})
-	}
-
-	t.Run("unrelated shape is an error", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"error":"nope"}`))
-		}))
-		t.Cleanup(srv.Close)
-		_, err := fetchNodeList(context.Background(), srv.URL)
-		require.Error(t, err)
-	})
-}
-
 // TestReadyzURLDerivation: signal URLs map to the readiness endpoint.
 func TestReadyzURLDerivation(t *testing.T) {
 	assert.Equal(t, "http://h:1/readyz", readyzURL("ws://h:1/signal"))
@@ -147,4 +106,71 @@ func TestNodesURLFallbackOnDiscoveryFailure(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return sess.ActiveSessions() >= 0 // connected; presence established
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+// TestFetchNodeListDualShape: the production server answers the
+// {"nodes":[...]} envelope; the bare array (spec §7 era) stays accepted.
+// Before the fix the envelope decode failed and every DiscoverBestNode
+// call silently fell back to the configured URL.
+func TestFetchNodeListDualShape(t *testing.T) {
+	envelope := `{"nodes":[{"node_id":"n1","name":"bj","signal_url":"wss://bj/signal","online":true,"priority":0}]}`
+	bare := `[{"node_id":"n1","name":"bj","signal_url":"wss://bj/signal","online":true}]`
+
+	for name, body := range map[string]string{"envelope": envelope, "bare": bare} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(srv.Close)
+
+			nodes, err := fetchNodeList(context.Background(), srv.URL)
+			require.NoError(t, err)
+			require.Len(t, nodes, 1)
+			require.Equal(t, "n1", nodes[0].NodeID)
+			require.True(t, nodes[0].Online)
+		})
+	}
+
+	t.Run("garbage still errors", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`not json`))
+		}))
+		t.Cleanup(srv.Close)
+		_, err := fetchNodeList(context.Background(), srv.URL)
+		require.Error(t, err)
+	})
+}
+
+// TestDiscoverAPIBase (#156): the envelope's api_base_url is the
+// authoritative identity/commerce base; bare-array answers (old servers)
+// and fetch failures yield "" (caller falls back to its configured base).
+func TestDiscoverAPIBase(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"nodes":[{"node_id":"m","signal_url":"wss://m/signal","online":true}],"api_base_url":"https://master.example"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	discoveryMu.Lock()
+	apiBaseCache = nil
+	discoveryMu.Unlock()
+
+	base := DiscoverAPIBase(context.Background(), srv.URL, nil)
+	require.Equal(t, "https://master.example", base)
+
+	// Cached second call must not re-fetch: kill the server and re-ask.
+
+	srv.Close()
+	require.Equal(t, "https://master.example", DiscoverAPIBase(context.Background(), srv.URL, nil))
+
+	// Bare-array (no api_base_url advertised) → empty.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"node_id":"m","signal_url":"wss://m/signal","online":true}]`))
+	}))
+	t.Cleanup(srv2.Close)
+	discoveryMu.Lock()
+	apiBaseCache = nil
+	discoveryMu.Unlock()
+	require.Empty(t, DiscoverAPIBase(context.Background(), srv2.URL, nil))
 }

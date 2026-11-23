@@ -19,9 +19,9 @@ func TestPathologicalDirectPair(t *testing.T) {
 		snap StatsSnapshot
 		want bool
 	}{
-		{"docker-bridge prflx shape with terrible RTT (360ms)", StatsSnapshot{
+		{"the observed artifact (docker-bridge prflx, 360ms)", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",
-			ICERemoteCandidateAddress: "192.168.77.63",
+			ICERemoteCandidateAddress: "192.168.193.63",
 			ICERTTSeconds:             0.363,
 		}, true},
 		{"artifact with stats lag (no RTT yet)", StatsSnapshot{
@@ -30,12 +30,12 @@ func TestPathologicalDirectPair(t *testing.T) {
 		}, true},
 		{"genuine same-LAN prflx (3ms) stays", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",
-			ICERemoteCandidateAddress: "192.168.77.52",
+			ICERemoteCandidateAddress: "192.168.63.52",
 			ICERTTSeconds:             0.003,
 		}, false},
 		{"public prflx stays", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",
-			ICERemoteCandidateAddress: "198.51.100.156",
+			ICERemoteCandidateAddress: "121.8.0.156",
 			ICERTTSeconds:             0.4,
 		}, false},
 		{"host-typed docker-bridge artifact (468ms) evicts", StatsSnapshot{
@@ -49,7 +49,7 @@ func TestPathologicalDirectPair(t *testing.T) {
 		}, true},
 		{"routed cross-subnet LAN host pair (11ms) stays", StatsSnapshot{
 			ICERemoteCandidateType:    "host",
-			ICERemoteCandidateAddress: "192.168.40.41",
+			ICERemoteCandidateAddress: "192.168.62.41",
 			ICERTTSeconds:             0.011,
 		}, false},
 		{"CGNAT-space VPN overlay host pair (220ms) stays", StatsSnapshot{
@@ -64,7 +64,7 @@ func TestPathologicalDirectPair(t *testing.T) {
 		}, false},
 		{"relay-nominated pair stays", StatsSnapshot{
 			ICERemoteCandidateType:    "relay",
-			ICERemoteCandidateAddress: "203.0.113.20",
+			ICERemoteCandidateAddress: "8.134.136.138",
 		}, false},
 		{"garbage address stays", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",

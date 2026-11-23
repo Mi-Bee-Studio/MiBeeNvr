@@ -7,7 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -25,13 +27,63 @@ import (
 
 // PublicNode mirrors one entry of GET /api/nodes.
 type PublicNode struct {
-	NodeID    string `json:"node_id"`
-	Name      string `json:"name"`
-	Region    string `json:"region,omitempty"`
-	Group     string `json:"group,omitempty"`
+	NodeID string `json:"node_id"`
+	Name   string `json:"name"`
+	Region string `json:"region,omitempty"`
+	Group  string `json:"group,omitempty"`
+	// SignalURL is the advertised endpoint; its host is the TLS SNI to
+	// present. One region domain covers every node in the region, so adding a
+	// node needs no DNS record (plan A).
 	SignalURL string `json:"signal_url"`
-	Online    bool   `json:"online"`
-	Priority  int    `json:"priority,omitempty"`
+	// SignalIP is the address to dial instead of resolving SignalURL's host.
+	// Dial it directly, keep SignalURL's host as SNI. Empty = resolve normally.
+	SignalIP string `json:"signal_ip,omitempty"`
+	// SignalDomain is the region domain used as SNI (host part of SignalURL).
+	// Provided so clients need not parse the URL; also the value browser
+	// clients use verbatim (plan C).
+	SignalDomain string `json:"signal_domain,omitempty"`
+	Online       bool   `json:"online"`
+	Priority     int    `json:"priority,omitempty"`
+}
+
+// TLSServerName returns the SNI a client must present for this node: the
+// region domain when the node published one, else "" (caller falls back to
+// the dialed host).
+func (n PublicNode) TLSServerName() string {
+	if n.SignalDomain != "" {
+		return n.SignalDomain
+	}
+	if u, err := url.Parse(n.SignalURL); err == nil {
+		return u.Host
+	}
+	return ""
+}
+
+// DialAddr rewrites the URL's host to SignalIP when one is published, so a
+// caller can dial the bare address while keeping the original host for SNI.
+// The returned changed=false means "use the URL unchanged".
+func (n PublicNode) DialAddr(rawURL string) (dialed string, serverName string, changed bool) {
+	serverName = n.TLSServerName()
+	if n.SignalIP == "" {
+		return rawURL, serverName, false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL, serverName, false
+	}
+	// Preserve the port from the original URL when SignalIP carries none.
+	host, port, splitErr := net.SplitHostPort(u.Host)
+	if splitErr != nil {
+		host = u.Host
+		port = ""
+	}
+	_ = host
+	if _, _, ipErr := net.SplitHostPort(n.SignalIP); ipErr != nil && port != "" {
+		u.Host = net.JoinHostPort(n.SignalIP, port)
+	} else {
+		u.Host = n.SignalIP
+	}
+	return u.String(), serverName, true
 }
 
 // nodeDiscoveryCache TTL: probing on every reconnect rung would hammer the
@@ -48,9 +100,11 @@ var nodeProbeTimeout = 3 * time.Second
 const bucketWidthMs = 50
 
 type discoveryResult struct {
-	best    string
-	rttMs   int64
 	fetched time.Time
+	best    string
+	// rttMs is the winning candidate's probed round trip; observational
+	// only (status pages), never an input to selection.
+	rttMs int64
 }
 
 // NodeSelection is the outcome of the last successful nearest-node
@@ -78,6 +132,7 @@ func LastNodeSelection(nodesURL string) (NodeSelection, bool) {
 var (
 	discoveryMu    sync.Mutex
 	discoveryCache map[string]discoveryResult
+	apiBaseCache   map[string]discoveryResult
 )
 
 // DiscoverBestNode fetches the node list and returns the best signal URL
@@ -122,6 +177,7 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 	var ordered []nodeCand
 	for b := int64(0); b <= maxBucket(buckets); b++ {
 		g := buckets[b]
+		//nolint:gosec // bucket shuffle anti-herd, not crypto
 		rand.Shuffle(len(g), func(i, j int) { g[i], g[j] = g[j], g[i] })
 		ordered = append(ordered, g...)
 	}
@@ -130,7 +186,11 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 		urlKey, best, rttMsKey, ordered[0].rtt.Milliseconds(), candidatesKey, len(cands))
 
 	discoveryMu.Lock()
-	discoveryCache[nodesURL] = discoveryResult{best: best, rttMs: ordered[0].rtt.Milliseconds(), fetched: time.Now()}
+	discoveryCache[nodesURL] = discoveryResult{
+		best:    best,
+		rttMs:   ordered[0].rtt.Milliseconds(),
+		fetched: time.Now(),
+	}
 	discoveryMu.Unlock()
 	return best
 }
@@ -175,42 +235,83 @@ func maxBucket(m map[int64][]nodeCand) int64 {
 	return top
 }
 
-// fetchNodeList retrieves the public node list. It accepts the two shapes
-// seen in the wild: the federation-spec bare array, or the {"nodes":[…]}
-// wrapper the platform served before aligning to the spec (live
-// observation 2026-11-10: the wrapper decodes into a nil slice with no
-// error, silently disabling nearest-node selection). Any other shape is an
-// error, which callers treat as "use the configured URL".
-func fetchNodeList(ctx context.Context, nodesURL string) ([]PublicNode, error) {
+// nodeListEnvelope is the server's GET /api/nodes answer. APIBaseURL is
+// the authoritative identity/commerce base (#156): device enrollment,
+// /api/my/*, orders and OTP live ONLY on the master — clients must point
+// these calls there even when signaling connects to a nearer worker.
+type nodeListEnvelope struct {
+	APIBaseURL string       `json:"api_base_url,omitempty"`
+	Nodes      []PublicNode `json:"nodes"`
+}
+
+// fetchNodeListEnvelope retrieves the public node list and its advertised
+// API base. The bare-array shape (spec §7 era) stays accepted for old
+// deployments — same dual-shape compatibility the linktest probe adopted.
+func fetchNodeListEnvelope(ctx context.Context, nodesURL string) (nodeListEnvelope, error) {
 	ctx, cancel := context.WithTimeout(ctx, nodeProbeTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, nodesURL, nil)
 	if err != nil {
-		return nil, err
+		return nodeListEnvelope{}, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nodeListEnvelope{}, err
 	}
 	defer func() { _ = resp.Body.Close() }() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("node list status %d", resp.StatusCode)
+		return nodeListEnvelope{}, fmt.Errorf("node list status %d", resp.StatusCode)
 	}
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if readErr != nil {
-		return nil, readErr
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nodeListEnvelope{}, err
+	}
+	var envelope nodeListEnvelope
+	if envErr := json.Unmarshal(body, &envelope); envErr == nil && envelope.Nodes != nil {
+		return envelope, nil
 	}
 	var nodes []PublicNode
-	if decodeErr := json.Unmarshal(body, &nodes); decodeErr == nil {
-		return nodes, nil
+	if decodeErr := json.Unmarshal(body, &nodes); decodeErr != nil {
+		return nodeListEnvelope{}, decodeErr
 	}
-	var wrapped struct {
-		Nodes []PublicNode `json:"nodes"`
+	return nodeListEnvelope{Nodes: nodes}, nil
+}
+
+// fetchNodeList retrieves just the node list (signal-plane discovery).
+func fetchNodeList(ctx context.Context, nodesURL string) ([]PublicNode, error) {
+	env, err := fetchNodeListEnvelope(ctx, nodesURL)
+	return env.Nodes, err
+}
+
+// DiscoverAPIBase returns the identity/commerce API base advertised by the
+// platform (#156): the URL under which /device/*, /api/my/*, /api/orders*
+// and /api/auth/phone/* must be called — NEVER a worker's base even when
+// signaling selected that worker. Empty string means "not advertised" —
+// callers fall back to their own configured master base.
+// Cached per nodesURL for nodeDiscoveryTTL like DiscoverBestNode.
+func DiscoverAPIBase(ctx context.Context, nodesURL string, logger *slog.Logger) string {
+	if logger == nil {
+		logger = slog.Default()
 	}
-	if wrapErr := json.Unmarshal(body, &wrapped); wrapErr != nil || wrapped.Nodes == nil {
-		return nil, fmt.Errorf("node list: unexpected shape")
+	discoveryMu.Lock()
+	if r, ok := apiBaseCache[nodesURL]; ok && time.Since(r.fetched) < nodeDiscoveryTTL {
+		discoveryMu.Unlock()
+		return r.best
 	}
-	return wrapped.Nodes, nil
+	discoveryMu.Unlock()
+
+	env, err := fetchNodeListEnvelope(ctx, nodesURL)
+	if err != nil {
+		logger.WarnContext(ctx, "node discovery fetch failed — api base unavailable", errKey, err)
+		return ""
+	}
+	discoveryMu.Lock()
+	if apiBaseCache == nil {
+		apiBaseCache = make(map[string]discoveryResult)
+	}
+	apiBaseCache[nodesURL] = discoveryResult{best: env.APIBaseURL, fetched: time.Now()}
+	discoveryMu.Unlock()
+	return env.APIBaseURL
 }
 
 // probeAll times an HTTP readiness check against each candidate's signal
@@ -274,4 +375,127 @@ func readyzURL(signalURL string) string {
 		}
 	}
 	return strings.TrimRight(u, "/") + "/readyz"
+}
+
+// Endpoint is one discovery result with everything a client needs to open a
+// TLS connection under DNS plan A: the address to dial (possibly a bare IP)
+// and the server name to present as SNI (the region domain).
+type Endpoint struct {
+	// URL is the advertised endpoint (also the HTTP-probe target).
+	URL string
+	// DialURL is URL with its host rewritten to the node's SignalIP when the
+	// platform published one. Dialing this keeps the certificate valid (SNI
+	// comes from ServerName) while skipping per-node DNS.
+	DialURL string
+	// ServerName is the SNI/TLS server name to present. Empty = the transport
+	// derives it from the dialed host.
+	ServerName string
+	// RTT is the measured latency used for ranking.
+	RTT time.Duration
+}
+
+var endpointCache sync.Map // nodesURL → endpointResult
+
+type endpointResult struct {
+	fetched time.Time
+	ep      Endpoint
+}
+
+// DiscoverBestEndpoint is DiscoverBestNode plus the DNS plan-A connection
+// details. Callers that need a TLS SNI distinct from the dialed IP (Go/Rust
+// with a published signal_ip) use this; DiscoverBestNode stays for callers
+// that only need a URL.
+//
+// Zero Endpoint (URL == "") means "no candidate beat the fallback".
+func DiscoverBestEndpoint(ctx context.Context, nodesURL string, logger *slog.Logger) Endpoint {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if cached, ok := endpointCache.Load(nodesURL); ok {
+		if r, isOK := cached.(endpointResult); isOK &&
+			time.Since(r.fetched) < nodeDiscoveryTTL && r.ep.URL != "" {
+			return r.ep
+		}
+	}
+
+	nodes, err := fetchNodeList(ctx, nodesURL)
+	if err != nil {
+		logger.WarnContext(ctx, "node discovery fetch failed — using configured URL", errKey, err)
+		return Endpoint{}
+	}
+
+	// Build probe candidates: prefer the direct-IP URL so the probe measures
+	// the path the client will actually use.
+	type cand struct {
+		node PublicNode
+		url  string
+	}
+	cands := make([]cand, 0, len(nodes))
+	probeURLs := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if !n.Online || !strings.Contains(n.SignalURL, "://") {
+			continue
+		}
+		dialURL, _, changed := n.DialAddr(n.SignalURL)
+		probeTarget := n.SignalURL
+		if changed {
+			probeTarget = dialURL
+		}
+		cands = append(cands, cand{node: n, url: probeTarget})
+		probeURLs = append(probeURLs, probeTarget)
+	}
+	if len(cands) == 0 {
+		return Endpoint{}
+	}
+
+	rtts := probeAll(ctx, probeURLs)
+	var alive []Endpoint
+	for _, c := range cands {
+		rtt, ok := rtts[c.url]
+		if !ok {
+			continue
+		}
+		dialURL, serverName, _ := c.node.DialAddr(c.node.SignalURL)
+		alive = append(alive, Endpoint{
+			URL:        c.node.SignalURL,
+			DialURL:    dialURL,
+			ServerName: serverName,
+			RTT:        rtt,
+		})
+	}
+	if len(alive) == 0 {
+		logger.WarnContext(ctx, "node discovery: every candidate probe failed — using configured URL")
+		return Endpoint{}
+	}
+
+	// Same bucketing policy as DiscoverBestNode.
+	buckets := make(map[int64][]Endpoint)
+	for _, e := range alive {
+		b := int64(e.RTT/time.Millisecond) / bucketWidthMs
+		buckets[b] = append(buckets[b], e)
+	}
+	var ordered []Endpoint
+	for b := int64(0); b <= maxBucketEndpoints(buckets); b++ {
+		group := buckets[b]
+		//nolint:gosec // bucket shuffle anti-herd, not crypto
+		rand.Shuffle(len(group), func(i, j int) { group[i], group[j] = group[j], group[i] })
+		ordered = append(ordered, group...)
+	}
+	best := ordered[0]
+	logger.InfoContext(ctx, "node discovery selected endpoint",
+		urlKey, best.URL, rttMsKey, best.RTT.Milliseconds(),
+		serverNameKey, best.ServerName, candidatesKey, len(alive))
+
+	endpointCache.Store(nodesURL, endpointResult{fetched: time.Now(), ep: best})
+	return best
+}
+
+func maxBucketEndpoints(m map[int64][]Endpoint) int64 {
+	var top int64
+	for b := range m {
+		if b > top {
+			top = b
+		}
+	}
+	return top
 }

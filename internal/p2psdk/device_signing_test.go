@@ -24,7 +24,7 @@ func buildTestJWT(sub, jti string) string {
 }
 
 // TestDeviceHelloSignature_signsSubAndJTI verifies the helper signs exactly
-// "<sub>:<jti>" with the configured device key.
+// "<sub>:<jti>" with the configured device key — of the token handed to it.
 func TestDeviceHelloSignature_signsSubAndJTI(t *testing.T) {
 	t.Parallel()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -41,12 +41,47 @@ func TestDeviceHelloSignature_signsSubAndJTI(t *testing.T) {
 	})
 	require.NotNil(t, sc.deviceKey)
 
-	sigB64 := sc.deviceHelloSignature()
+	carried := buildTestJWT("device:p:d", "fresh-jti")
+	sigB64 := sc.deviceHelloSignature(carried)
 	require.NotEmpty(t, sigB64, "role=device with key must sign")
 	sig, err := base64.StdEncoding.DecodeString(sigB64)
 	require.NoError(t, err)
-	require.True(t, ed25519.Verify(pub, []byte("device:p:d:jti-42"), sig),
-		"signature must verify over <sub>:<jti>")
+	require.True(t, ed25519.Verify(pub, []byte("device:p:d:fresh-jti"), sig),
+		"signature must verify over the CARRIED token's <sub>:<jti>")
+}
+
+// TestDeviceHelloSignature_matchesCarriedToken is the regression for the
+// nvr-c2cbab rejection storm (2026-11-12): with TokenFunc minting fresh
+// single-use tokens, the signature was derived from the STALE cfg.JWT while
+// the hello carried the fresh one — server-side verification compared jtis
+// from two different tokens and every minted hello was refused with
+// device_identity_failed. The signature must always match the carried token.
+func TestDeviceHelloSignature_matchesCarriedToken(t *testing.T) {
+	t.Parallel()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	keyPath := filepath.Join(t.TempDir(), "device.key")
+	require.NoError(t, os.WriteFile(keyPath, priv, 0o600))
+
+	staleJWT := buildTestJWT("device:p:d", "stale-jti")
+	sc := newSignalingClient(SignalingConfig{
+		ServerURL:     "ws://irrelevant",
+		JWT:           staleJWT,
+		Role:          "device",
+		DeviceKeyPath: keyPath,
+	})
+
+	freshJWT := buildTestJWT("device:p:d", "fresh-jti")
+	sigB64 := sc.deviceHelloSignature(freshJWT)
+	require.NotEmpty(t, sigB64)
+	sig, err := base64.StdEncoding.DecodeString(sigB64)
+	require.NoError(t, err)
+
+	require.True(t, ed25519.Verify(pub, []byte("device:p:d:fresh-jti"), sig),
+		"signature must cover the fresh (carried) token's jti")
+	require.False(t, ed25519.Verify(pub, []byte("device:p:d:stale-jti"), sig),
+		"signature must NOT cover the stale cfg.JWT jti — that was the bug")
 }
 
 // TestDeviceHelloSignature_skipsForClientOrKeyless verifies no signature is
@@ -61,12 +96,12 @@ func TestDeviceHelloSignature_skipsForClientOrKeyless(t *testing.T) {
 	clientWithKey := newSignalingClient(SignalingConfig{
 		JWT: buildTestJWT("u", "j"), Role: "client", DeviceKeyPath: keyPath,
 	})
-	require.Empty(t, clientWithKey.deviceHelloSignature())
+	require.Empty(t, clientWithKey.deviceHelloSignature(buildTestJWT("u", "j")))
 
 	deviceNoKey := newSignalingClient(SignalingConfig{
 		JWT: buildTestJWT("u", "j"), Role: "device",
 	})
-	require.Empty(t, deviceNoKey.deviceHelloSignature())
+	require.Empty(t, deviceNoKey.deviceHelloSignature(buildTestJWT("u", "j")))
 
 	// Unreadable key falls back to unsigned rather than failing Dial.
 	deviceBadKey := newSignalingClient(SignalingConfig{
@@ -74,7 +109,7 @@ func TestDeviceHelloSignature_skipsForClientOrKeyless(t *testing.T) {
 		DeviceKeyPath: filepath.Join(t.TempDir(), "missing.key"),
 	})
 	require.Nil(t, deviceBadKey.deviceKey)
-	require.Empty(t, deviceBadKey.deviceHelloSignature())
+	require.Empty(t, deviceBadKey.deviceHelloSignature(buildTestJWT("u", "j")))
 }
 
 // TestDeviceHelloSignature_acceptsSeedForm verifies a 32-byte seed key file
@@ -94,7 +129,7 @@ func TestDeviceHelloSignature_acceptsSeedForm(t *testing.T) {
 	})
 	require.NotNil(t, sc.deviceKey)
 
-	sig, err := base64.StdEncoding.DecodeString(sc.deviceHelloSignature())
+	sig, err := base64.StdEncoding.DecodeString(sc.deviceHelloSignature(buildTestJWT("device:p:d2", "jti-7")))
 	require.NoError(t, err)
 	require.True(t, ed25519.Verify(pub, []byte("device:p:d2:jti-7"), sig))
 }

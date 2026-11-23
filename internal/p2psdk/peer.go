@@ -10,7 +10,6 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -49,6 +48,10 @@ type IncomingConnect struct {
 	// ServiceName is the tunnel service the requester wants to reach
 	// (may be empty when unspecified).
 	ServiceName string
+	// Purpose is the requester's declared session purpose (#136, additive
+	// JSON — empty from old peers). "playback" marks a playback session so
+	// purpose-aware gates can apply product policy.
+	Purpose string
 }
 
 // Dial connects to the signaling server and returns a Session.
@@ -81,30 +84,18 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 		closeCh: make(chan struct{}),
 		done:    make(chan struct{}),
 	}
+	// #162: the session's relay IDENTITY is minted now — before any dial —
+	// so the key announced in connect_request/sdp_* exists even when the
+	// relay dial is rejected (ticket gate, capacity) or still in flight.
+	// Announcement no longer depends on a successful dial.
+	identityPub, identityPriv := relay.GenerateKeyPair()
+	s.relayIdentity = &identityKeypair{pub: identityPub, priv: identityPriv}
 	s.lastSessionID = welcome.SessionID
 	sc.lastSessionID = welcome.SessionID
-	// Relay identity is minted BEFORE any dial attempt (mibeescout#16): the
-	// announced public key must exist even when the dial below is gated or
-	// fails — the peer arms its tunnel E2EE and routing key against it.
-	s.relayIdentity = relay.NewClient()
-	// Connect to relay server if enabled (host gate + outcome callback
-	// consulted inside — see connectSessionRelay). The IDENTITY client is
-	// the one being connected: on success it becomes relayClient (announced
-	// key == routing key, always); on gated/failure it stays identity-only.
-	if welcome.RelayURL != "" && welcome.RelayPubKey != "" {
-		err := connectRelayClient(ctx, s.relayIdentity, welcome.RelayURL,
-			welcome.RelayPubKey, cfg, logger)
-		switch {
-		case errors.Is(err, ErrRelayGated):
-			// host circuit open — deliberate skip, not a failure
-		case err == nil:
-			s.relayClient = s.relayIdentity
-			s.relayIdentity.OnFatal(s.relayFatalHook(s.relayIdentity))
-			s.relayIdentity.OnPeerGone(s.relayPeerGoneHook(s.relayIdentity))
-		default:
-			// failure already logged + reported inside connectRelayClient
-		}
-	}
+	// Mid-life TURN credential renewal (#132): long-lived sessions must
+	// swap credentials before expiry or the relay fallback dies.
+	s.scheduleICERefresh()
+	s.dialRelay(ctx, welcome, logger)
 
 	sc.onMessage = s.handleMessage
 	sc.onClose = func(err error) {
@@ -133,6 +124,51 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 	// 在同一 socket 上复探比对映射，结果供诊断/后续选路决策消费。
 	go s.observeNAT(welcome) //nolint:gosec,contextcheck // detached: observation outlives request scope
 	return s, nil
+}
+
+// dialRelay connects the relay fallback transport when the Welcome grants
+// one. Failure is non-fatal — direct ICE still works, and a later re-welcome
+// retries the dial. Presents the #143 session ticket when the server minted
+// one; ticket-less servers ignore the auth suffix.
+func (s *Session) dialRelay(ctx context.Context, welcome *Welcome, logger *slog.Logger) {
+	if welcome.RelayURL == "" || welcome.RelayPubKey == "" {
+		return
+	}
+	// Host circuit breaking: a gated attempt never happens, so it must not
+	// report an outcome either (an attempt that never happened cannot fail).
+	if cfg := s.sessionConfig(); cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
+		logger.InfoContext(ctx, "relay connect skipped by host gate (circuit open)")
+		return
+	}
+	// #162: build the client on the session identity, not a fresh keypair.
+	rc := s.newIdentityClient()
+	// #143: present the signaling-minted session ticket when the server
+	// issued one; ticket-less servers ignore the suffix.
+	if tb, terr := relay.TicketFromBase64(welcome.RelayTicket); terr == nil && len(tb) > 0 {
+		rc.SetTicket(tb)
+	} else if terr != nil {
+		logger.WarnContext(ctx, "relay ticket decode failed (connecting without)", errorKey, terr)
+	}
+	connectErr := rc.Connect(ctx, welcome.RelayURL, welcome.RelayPubKey)
+	if cfg := s.sessionConfig(); cfg.OnRelayConnect != nil {
+		cfg.OnRelayConnect(connectErr)
+	}
+	if connectErr != nil {
+		logger.WarnContext(ctx, "relay connect failed (non-fatal)", errorKey, connectErr)
+		return
+	}
+	s.relayClient = rc
+	// #162: the hooks are bound to THIS client — a fatal from a client that
+	// has already been superseded must not trigger another rebuild.
+	// contextcheck anchors at this dispatch line: the fatal callback fires
+	// from the relay read loop, which outlives Dial's ctx, so recovery
+	// cannot inherit it.
+	rc.OnFatal(s.relayFatalHook(rc)) //nolint:contextcheck // detached session-scoped recovery
+	rc.OnPeerGone(s.relayPeerGoneHook(rc))
+	logger.InfoContext(ctx,
+		"relay connection established",
+		relayURLKey, welcome.RelayURL,
+	)
 }
 
 // NatObservation is one completed NAT behavior probe. Observational only:
@@ -213,9 +249,24 @@ func (s *Session) observeNAT(welcome *Welcome) {
 	}
 }
 
+// identityKeypair is the session's relay identity: the key announced to
+// peers (connect_request/sdp_*) and presented to the relay server. It is
+// minted at session creation and never re-minted, so the announced key and
+// the routing key stay identical across relay rebuilds and re-pointing
+// (#162).
+type identityKeypair struct {
+	pub  [32]byte
+	priv [32]byte
+}
+
 // Session represents a P2P session connected to the signaling server.
 type Session struct {
 	OnStats func(StatsSnapshot) // called with GetStats snapshots (optional; assign before Connect)
+	// OnPathChange fires when the nominated ICE pair changes within a session
+	// (sessionID, fromPair, toPair; pair = localType/addr → remoteType/addr).
+	// Additive and independent of telemetry gating. Precision = OnStats tick
+	// (5s). Assign before Connect.
+	OnPathChange func(sessionID, from, to string)
 	// OnConnectRequest is an optional admission gate for inbound connection
 	// requests (device role). It runs before any WebRTC machinery starts;
 	// returning false makes the SDK answer the requester with connect_reject
@@ -226,22 +277,17 @@ type Session struct {
 	logger           *slog.Logger
 	welcome          *Welcome
 	relayClient      *relay.Client
-	// relayIdentity is the session-stable relay IDENTITY keypair holder
-	// (mibeescout#16 device-side half): minted at session creation, before
-	// and independent of any relay CONNECTION. Offer/answer and
-	// connect_request announce ITS public key, so the peer can arm tunnel
-	// E2EE and aim its routing key even while the relay dial is gated,
-	// failing, or mid-rebuild. When the dial succeeds the SAME client
-	// becomes relayClient (identity == routing key, always); on failure the
-	// identity survives for the next attempt. See NewClientWithIdentity.
-	relayIdentity *relay.Client
-	// relayRebuilding is the single-flight gate for rebuildRelayClient: one
-	// rebuild at a time per signaling session. Without it every superseded
-	// client records its own fatal and spawns its own ladder — N concurrent
-	// rebuilds re-dial the SAME identity key, each one displacing the last
-	// server-side, which is a self-sustaining takeover loop (production
-	// 2026-11-23: 5s/round ×3000+, remote access down).
-	relayRebuilding atomic.Bool
+	// relayIdentity is the session's stable relay identity (#162), minted
+	// in Dial before any relay dial. Every relay client this session builds
+	// (initial dial, rebuild, federated re-point) reuses this keypair, so
+	// the key announced to peers never drifts.
+	//
+	// Held by pointer: the keypair is 64 bytes of immutable data, and
+	// inlining it would grow Session past its allocator size class.
+	relayIdentity *identityKeypair
+	// iceRefreshTimer drives the #132 mid-life TURN credential renewal;
+	// re-armed from every refreshed ICE list.
+	iceRefreshTimer *time.Timer
 	// Callbacks (set by the user; OnSession/OnDataChannel/OnReject are read
 	// live at event time, so they may be assigned any time before the event
 	// fires — including after Connect() returns via SetOnDataChannel)
@@ -249,6 +295,18 @@ type Session struct {
 	OnDataChannel func(dc DataChannel)              // called when a DataChannel opens
 	OnReject      func(code RejectCode, msg string) // called on connect rejection
 	OnError       func(code, msg string)            // called on a server-level error message
+	// OnLinkDegraded fires when the fast-switch monitor (#134⑤) escalates a
+	// degraded session: two consecutive windows with loss above threshold
+	// (app-fed via ReportLinkQuality) or an ICE RTT spike. cause is "loss"
+	// or "rtt". Observational — the SDK already escalates (offerer restarts
+	// ICE); embedders use it for UI quality hints.
+	OnLinkDegraded func(sessionID, cause string)
+	// OnPlaybackDegraded fires when a playback-purpose session violates the
+	// tunnel-only policy (#136): no direct path exists (relay/TURN would
+	// carry the media). reason is a PlaybackDegraded* constant. UI semantics:
+	// show an explicit "当前网络环境不支持远程回放" notice — never a silent
+	// fallback. Followed by session teardown (reason playback_tunnel_only).
+	OnPlaybackDegraded func(sessionID, reason string)
 	// natObs carries the latest NAT behavior probe (observeNAT).
 	natObs atomic.Pointer[NatObservation]
 	// OnSessionClose is called when a P2P session is torn down (remote
@@ -266,23 +324,52 @@ type Session struct {
 	mu               sync.RWMutex
 	cfgMu            sync.RWMutex
 	closeOnce        sync.Once
+	// relayRebuilding is the rebuild single-flight guard (#162). Two
+	// concurrent fatal callbacks (a dying old client and the new one that
+	// displaced it) used to race into parallel rebuilds that dialed with
+	// the same identity and displaced each other — an endless
+	// rebuild/takeover loop at ~5s per cycle. Placed last: a 4-byte atomic
+	// between pointers would force 4 bytes of padding.
+	relayRebuilding atomic.Bool
 }
 
 // Connect initiates a connection to a target peer.
 // Returns after the connect_request is sent; session establishes
 // asynchronously. Use OnSession and OnDataChannel callbacks.
 func (s *Session) Connect(ctx context.Context, targetPeerID string, serviceName ...string) error {
+	var opts ConnectOptions
+	if len(serviceName) > 0 {
+		opts.ServiceName = serviceName[0]
+	}
+	return s.ConnectWith(ctx, targetPeerID, opts)
+}
+
+// ConnectOptions declares the dial parameters of ConnectWith.
+type ConnectOptions struct {
+	// ServiceName is the tunnel service the client wants to reach.
+	ServiceName string
+	// Purpose declares the session's business purpose (#136). PurposePlayback
+	// puts the session under the PlaybackTunnelOnly policy when that switch
+	// is on: the session may only ride a direct pair, otherwise it degrades
+	// with an explicit OnPlaybackDegraded notice. Default (zero value) keeps
+	// the full degradation chain.
+	Purpose SessionPurpose
+}
+
+// ConnectWith initiates a connection with explicit dial options (the
+// variadic serviceName flavor of Connect stays for compatibility).
+func (s *Session) ConnectWith(ctx context.Context, targetPeerID string, opts ConnectOptions) error {
 	sessionID := uuid.New().String()
 
 	p2p := &p2pSession{
-		sessionID:     sessionID,
-		remotePeerID:  targetPeerID,
-		isOfferer:     false,
-		logger:        s.logger,
-		owner:         s,
-		onStats:       s.OnStats,
-		relayClient:   s.relayClient,
-		relayIdentity: s.relayIdentity,
+		sessionID:    sessionID,
+		remotePeerID: targetPeerID,
+		isOfferer:    false,
+		logger:       s.logger,
+		owner:        s,
+		onStats:      s.OnStats,
+		relayClient:  s.relayClient,
+		purpose:      opts.Purpose,
 	}
 	// 活跃度锚点=创建时刻：从未承载流量的会话（握手即死）也会被
 	// 空闲清扫按超时回收，而不是永久滞留名册。
@@ -300,22 +387,19 @@ func (s *Session) Connect(ctx context.Context, targetPeerID string, serviceName 
 		// unknown field and keep the single p2p-data channel — every
 		// direction of the version matrix stays wire-compatible.
 		CtrlChannel: true,
+		// #136: declare the session purpose (additive JSON — old devices
+		// ignore it). The device side threads it into its own session for
+		// symmetric policy enforcement.
+		Purpose: string(opts.Purpose),
 	}
-	if len(serviceName) > 0 {
-		req.ServiceName = serviceName[0]
-	}
-	// Arm direct-path E2EE upfront (mibeescout#16): the device creates the
+	req.ServiceName = opts.ServiceName
+	// Arm direct-path E2EE upfront (the relay-identity gap): the device creates the
 	// DataChannel before the SDP exchange can carry our relay identity, so
-	// hand it over with the request. The IDENTITY keypair exists
-	// independently of any live relay connection — gated on relay INTENT
-	// (welcome carried relay config), not on dial success: with intent the
-	// rebuild loop keeps trying, so the key becomes routable; announcing it
-	// early is what lets the device arm direct-path E2EE while the relay
-	// leg is still down.
-	if s.relayIntent() {
-		callerPub := s.relayIdentity.PubKey()
-		req.CallerRelayPubKey = hex.EncodeToString(callerPub[:])
-	}
+	// hand it over with the request. #162: announce the SESSION identity,
+	// which exists independently of any live relay connection — a rejected
+	// or in-flight dial must not leave the peer without our key.
+	callerPub := s.relayIdentity.pub
+	req.CallerRelayPubKey = hex.EncodeToString(callerPub[:])
 	if err := s.signal.sendRawMsg(MessageTypeConnectRequest, req); err != nil {
 		return fmt.Errorf("send connect_request: %w", err)
 	}
@@ -439,40 +523,78 @@ func (s *Session) getP2P(sessionID string) *p2pSession {
 	return s.peers[sessionID]
 }
 
-// relayFatalHook returns the OnFatal callback for ONE relay client. A fatal
-// from a client that is no longer the session's current relayClient is
-// stale: it was superseded by a rebuild or a cross-node repoint, and its
-// death must not start another rebuild. Without this ownership check the
-// server's same-key takeover ("relay connection replaced by re-auth", which
-// closes the PREVIOUS connection when the same identity re-registers) turns
-// every completed rebuild into the trigger for the next one — a closed loop
-// that never converges (production incident, 2026-11-23).
+// relayFatalHook binds the fatal callback to one relay client (#162).
+//
+// The callback records WHICH generation of client died. A client that has
+// already been superseded (its replacement registered successfully) must
+// not start another rebuild: the server's same-key takeover closes the OLD
+// connection by design, so without this check every successful rebuild
+// immediately schedules the next one — the measured ~5s forever loop.
 func (s *Session) relayFatalHook(rc *relay.Client) func(error) {
 	return func(err error) {
-		s.mu.RLock()
-		current := s.relayClient
-		s.mu.RUnlock()
-		if current != rc {
-			s.logger.Debug("stale relay client died after being superseded — not rebuilding",
-				errKey, err)
+		if !s.isCurrentRelayClient(rc) {
+			s.logger.Info("stale relay client fatal ignored (already superseded)",
+				errorKey, err)
 			return
 		}
+		// contextcheck anchors at the chain start (this dispatch line, not
+		// the callee): recovery is deliberately detached from any request
+		// or Dial scope — the session outlives both, and the rebuild ladder
+		// owns its own timeouts.
 		s.handleRelayFatal(err)
 	}
 }
 
-// relayPeerGoneHook is relayFatalHook's #117 counterpart: a superseded
-// client's routing-loss notifications are equally stale.
+// relayPeerGoneHook binds the peer-gone callback to one relay client so a
+// superseded generation cannot drive recovery for its successor (#162).
 func (s *Session) relayPeerGoneHook(rc *relay.Client) func([32]byte, byte) {
 	return func(peer [32]byte, reason byte) {
-		s.mu.RLock()
-		current := s.relayClient
-		s.mu.RUnlock()
-		if current != rc {
+		if !s.isCurrentRelayClient(rc) {
 			return
 		}
 		s.handleRelayPeerGone(peer, reason)
 	}
+}
+
+// isCurrentRelayClient reports whether rc is still the session's active
+// relay client.
+func (s *Session) isCurrentRelayClient(rc *relay.Client) bool {
+	s.mu.RLock()
+	cur := s.relayClient
+	s.mu.RUnlock()
+	return cur != nil && cur == rc
+}
+
+// newIdentityClient builds a relay client on the session's stable identity
+// (#162). Every construction path — initial dial, rebuild, federated
+// re-point, and test doubles — goes through here so the announced key can
+// never drift from the routing key.
+func (s *Session) newIdentityClient() *relay.Client {
+	if s.relayIdentity == nil {
+		// Defensive: a Session built outside Dial (tests) has no identity.
+		// Fall back to a fresh keypair rather than an all-zero-key client.
+		pub, priv := relay.GenerateKeyPair()
+		return relay.NewClientWithIdentity(pub, priv)
+	}
+	return relay.NewClientWithIdentity(s.relayIdentity.pub, s.relayIdentity.priv)
+}
+
+// relayIdentityPub returns the session's relay identity public key (#162).
+// ok=false when the identity was never minted (zero value), which only
+// happens for a Session built outside Dial (tests).
+func (s *Session) relayIdentityPub() (pub [32]byte, ok bool) {
+	if s.relayIdentity == nil {
+		return [32]byte{}, false
+	}
+	return s.relayIdentity.pub, s.relayIdentity.pub != [32]byte{}
+}
+
+// relayIdentityKeys returns the session's relay identity keypair (#162).
+func (s *Session) relayIdentityKeys() (pub, priv [32]byte, ok bool) {
+	if s.relayIdentity == nil || s.relayIdentity.pub == [32]byte{} {
+		return [32]byte{}, [32]byte{}, false
+	}
+	return s.relayIdentity.pub, s.relayIdentity.priv, true
 }
 
 // handleRelayFatal reacts to the session-level relay WebSocket dying (read
@@ -490,11 +612,30 @@ func (s *Session) handleRelayFatal(err error) {
 		return // Session.Close() owns teardown
 	default:
 	}
+	// #162: a same-key takeover means a NEWER connection of ours already
+	// owns the key — the server displaced this (older) one on purpose.
+	// Rebuilding here is what produced the measured 5s/cycle loop. The
+	// sessions riding the displaced socket still need teardown (the server
+	// stopped reading it), but the transport itself is healthy.
+	if relay.IsReplaced(err) {
+		s.logger.Info("relay connection superseded by a newer registration — not rebuilding",
+			errorKey, err)
+		s.teardownRelayRiders("relay_transport_superseded")
+		return
+	}
 	s.logger.Warn("relay connection fatal — rebuilding", errKey, err)
 
-	// 1) Tear down sessions riding the dead transport: signaling
-	// session_close makes the peer redial immediately instead of timing out
-	// against silence; the OnSessionClose callback surfaces to the embedder.
+	s.teardownRelayRiders("relay_transport_dead")
+
+	// 2) Rebuild the shared relay client in the background (bounded).
+	go s.rebuildRelayClient(err)
+}
+
+// teardownRelayRiders closes every session currently riding the relay
+// transport. Signaling session_close makes the peer redial immediately
+// instead of timing out against silence; the OnSessionClose callback
+// surfaces to the embedder.
+func (s *Session) teardownRelayRiders(reason string) {
 	s.mu.RLock()
 	victims := make([]*p2pSession, 0, len(s.peers))
 	for _, p2p := range s.peers {
@@ -504,11 +645,8 @@ func (s *Session) handleRelayFatal(err error) {
 	}
 	s.mu.RUnlock()
 	for _, p2p := range victims {
-		p2p.teardownWithReason("relay_transport_dead")
+		p2p.teardownWithReason(reason)
 	}
-
-	// 2) Rebuild the shared relay client in the background (bounded).
-	go s.rebuildRelayClient(err)
 }
 
 // handleRelayPeerGone reacts to the server's FramePeerGone (#106-B): a peer we
@@ -559,95 +697,39 @@ func (s *Session) handleRelayPeerGone(peer [32]byte, reason byte) {
 	}
 }
 
-// ErrRelayGated reports that the host's RelayDialGate skipped the relay
-// dial: NOT a failure — callers proceed without a relay client (direct-
-// first arbitration). Deliberately no OnRelayConnect callback fires for a
-// gated skip: an attempt that never happened cannot fail.
-var ErrRelayGated = errors.New("relay dial skipped by host gate")
-
-// connectSessionRelay dials the session-level relay transport with a FRESH
-// identity (CLI convenience path). The session layer uses connectRelayClient
-// instead so its announced identity and routing key stay one and the same.
-func connectSessionRelay(ctx context.Context, serverURL, serverPubKeyHex string, cfg SignalingConfig, logger *slog.Logger) (*relay.Client, error) {
-	rc := relay.NewClient()
-	if err := connectRelayClient(ctx, rc, serverURL, serverPubKeyHex, cfg, logger); err != nil {
-		return nil, err
-	}
-	return rc, nil
-}
-
-// connectRelayClient dials an EXISTING relay client (identity pre-minted —
-// mibeescout#16), honoring the host's RelayDialGate and reporting every
-// real attempt outcome via OnRelayConnect. Both relay connect sites (Dial-
-// time and the mid-life rebuild loop) go through here so host-side circuit
-// breaking sees every dial.
-func connectRelayClient(ctx context.Context, rc *relay.Client, serverURL, serverPubKeyHex string, cfg SignalingConfig, logger *slog.Logger) error {
-	if cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
-		logger.Info("relay connect skipped by host gate (circuit open)")
-		return ErrRelayGated
-	}
-	err := rc.Connect(ctx, serverURL, serverPubKeyHex)
-	if cfg.OnRelayConnect != nil {
-		cfg.OnRelayConnect(err)
-	}
-	if err != nil {
-		logger.Warn("relay connect failed (non-fatal)", "error", err)
-		return err
-	}
-	logger.Info("relay connection established", relayURLKey, serverURL)
-	return nil
-}
-
-// relayIntent reports whether the platform welcome carried relay
-// configuration — regardless of the current dial state (gated, failed,
-// mid-rebuild). Only under intent does the session announce its relay
-// identity: with no relay to ever register on, an announced key would be a
-// permanently unroutable destination, actively misleading the peer's
-// forced-relay path.
-func (s *Session) relayIntent() bool {
-	w := s.welcome
-	return w != nil && w.RelayURL != "" && w.RelayPubKey != ""
-}
-
 // rebuildRelayClient reconnects the session-level relay transport with
 // bounded retries. A fresh relay.Client is used each attempt (the previous
 // one is permanently failed — fatalOnce is spent), matching the
-// full-rebuild contract — but every attempt is RE-KEYED WITH THE SESSION'S
-// STABLE IDENTITY (mibeescout#16): the announced public key must not change
-// across rebuilds, or the peer's armed E2EE key and routing key go stale.
-// New sessions snapshot the new client at creation.
+// full-rebuild contract. New sessions snapshot the new client at creation.
 // A restarting cause (#106-B) shortens the FIRST attempt to the server's
 // retry hint (+ jitter, clamped) — the server said it will be back shortly.
-//
-// Single-flight: at most one rebuild runs per session. Concurrent ladders
-// would each dial the SAME identity key, and the relay server evicts the
-// previous registration on a same-key re-auth — so the fastest ladder kills
-// the connection a slower one just built, and every eviction feeds another
-// fatal. See relayFatalHook for the matching ownership check.
 func (s *Session) rebuildRelayClient(cause error) {
 	w := s.welcome
 	if w == nil || w.RelayURL == "" {
 		return
 	}
-	if !s.relayRebuilding.CompareAndSwap(false, true) {
-		s.logger.Debug("relay rebuild already in flight — coalescing")
+	// #162 single-flight: concurrent fatal callbacks (a displaced old client
+	// and its replacement) used to run parallel rebuild ladders that dialed
+	// with the same identity and displaced each other forever.
+	if !s.beginRelayRebuild() {
+		s.logger.Debug("relay rebuild already in flight — skipping duplicate")
 		return
 	}
 	defer s.relayRebuilding.Store(false)
+	// Host circuit breaking, consulted before the first attempt too: a
+	// circuit that is open now means there is nothing to retry — sleeping
+	// through the backoff first would just delay the skip.
+	if cfg := s.sessionConfig(); cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
+		s.logger.Info("relay rebuild skipped by host gate (circuit open)")
+		return
+	}
+
 	firstDelay := 5 * time.Second
 	if hint, ok := relay.RetryHint(cause); ok {
 		firstDelay = hint + jitterUpTo(750*time.Millisecond)
 		firstDelay = min(max(firstDelay, 300*time.Millisecond), 10*time.Second)
 	}
 	for attempt := 1; attempt <= 3; attempt++ {
-		// The host gate is re-consulted per attempt: a circuit that opened
-		// while we were sleeping must stop here, not dial into a known-dead
-		// relay. The next signaling session retries naturally.
-		cfg := s.sessionConfig()
-		if cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
-			s.logger.Info("relay rebuild skipped by host gate (circuit open)")
-			return
-		}
 		delay := firstDelay
 		if attempt > 1 {
 			delay = time.Duration(attempt) * 5 * time.Second
@@ -657,29 +739,45 @@ func (s *Session) rebuildRelayClient(cause error) {
 			return
 		case <-time.After(delay):
 		}
-		// Same identity as the announced key — see NewClientWithIdentity.
-		pub, priv := s.relayIdentity.IdentityKeys()
-		rc := relay.NewClientWithIdentity(pub, priv)
+		// Host circuit breaking is re-consulted per attempt: a circuit that
+		// opened while we were sleeping must stop here rather than dial into
+		// a known-dead relay. The next signaling session retries naturally.
+		cfg := s.sessionConfig()
+		if cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
+			s.logger.Info("relay rebuild skipped by host gate (circuit open)")
+			return
+		}
+		// #162: same identity across rebuilds — the announced key must not
+		// drift, and the server must recognize the re-dial as this peer.
+		rc := s.newIdentityClient()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := connectRelayClient(ctx, rc, w.RelayURL, w.RelayPubKey, cfg, s.logger)
+		err := rc.Connect(ctx, w.RelayURL, w.RelayPubKey)
 		cancel()
-		if errors.Is(err, ErrRelayGated) {
-			return // gate closed between the check and the dial
+		if cfg.OnRelayConnect != nil {
+			cfg.OnRelayConnect(err)
 		}
 		if err != nil {
 			s.logger.Warn("relay rebuild attempt failed",
 				attemptKey, attempt, errorKey, err)
 			continue
 		}
-		rc.OnFatal(s.relayFatalHook(rc))
-		rc.OnPeerGone(s.relayPeerGoneHook(rc))
+		// Register the replacement BEFORE arming its hooks so the takeover
+		// of the previous generation cannot be mistaken for our own death.
 		s.mu.Lock()
 		s.relayClient = rc
 		s.mu.Unlock()
+		rc.OnFatal(s.relayFatalHook(rc))
+		rc.OnPeerGone(s.relayPeerGoneHook(rc))
 		s.logger.Info("relay connection rebuilt", attemptKey, attempt)
 		return
 	}
 	s.logger.Warn("relay rebuild gave up after 3 attempts")
+}
+
+// beginRelayRebuild claims the rebuild slot. ok=false means another ladder
+// already owns it and this trigger must be dropped (#162 single-flight).
+func (s *Session) beginRelayRebuild() bool {
+	return s.relayRebuilding.CompareAndSwap(false, true)
 }
 
 // jitterUpTo returns a pseudo-random duration in [0, bound) — the
@@ -762,6 +860,39 @@ func (s *Session) sessionCloseCallback() func(sessionID, reason string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.OnSessionClose
+}
+
+// linkDegradedCallback returns the live #134⑤ fast-switch event callback.
+func (s *Session) linkDegradedCallback() func(sessionID, cause string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.OnLinkDegraded
+}
+
+// playbackDegradedCallback returns the live #136 policy degradation
+// callback.
+func (s *Session) playbackDegradedCallback() func(sessionID, reason string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.OnPlaybackDegraded
+}
+
+// ReportLinkQuality feeds a media-layer loss measurement into the session's
+// fast-switch monitor (#134⑤). The transport SDK cannot see decoder-level
+// loss on the tunnel streams — the embedder (media stack port) measures it
+// (per-stream reassembly gaps, decode stalls) and reports it here;
+// lossPct is clamped to [0,100]. Samples are valid for 10s (two stats
+// ticks); a fresh healthy sample suppresses the RTT-based fallback check.
+// The monitor escalates after two consecutive degraded windows (see
+// linkmon.go); reporting more often than every ~5s is wasteful but harmless.
+func (s *Session) ReportLinkQuality(sessionID string, lossPct float64) error {
+	p := s.getP2P(sessionID)
+	if p == nil {
+		return ErrSessionNotFound
+	}
+	lossPct = min(max(lossPct, 0), 100)
+	p.linkLoss.Store(&linkQuality{lossPct: lossPct, at: time.Now()})
+	return nil
 }
 
 // deleteP2P removes a p2pSession by sessionID and returns it.

@@ -81,6 +81,13 @@ func (p *p2pSession) checkPathEviction(snap StatsSnapshot) {
 	if streak < pathologicalStreakMin {
 		return
 	}
+	// #136: playback sessions never demote to the relay transport — the
+	// tunnel-only policy demands explicit degradation at the eviction
+	// trigger instead of a silent relay adoption.
+	if p.playbackTunnelOnlyArmed() {
+		p.degradePlayback(PlaybackDegradedRelay)
+		return
+	}
 	p.evictOnce.Do(func() {
 		p.log().Warn("pathological direct pair evicted to relay",
 			sessionIDKey, p.sessionID,

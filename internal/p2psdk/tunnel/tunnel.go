@@ -34,12 +34,16 @@ type Tunnel struct {
 	// msgCh carries inbound frames from the (construction-time) transport
 	// handler to the Serve loop. Buffering here is what makes pre-Serve
 	// frames survivable.
-	msgCh            chan []byte
-	registry         *StreamRegistry
-	e2eeAckCh        chan struct{}
-	early            map[uint32][][]byte
-	echoPending      map[uint32]chan echoAnswer
-	services         map[string]string
+	msgCh       chan []byte
+	registry    *StreamRegistry
+	e2eeAckCh   chan struct{}
+	early       map[uint32][][]byte
+	echoPending map[uint32]chan echoAnswer
+	services    map[string]string
+	// onBitrate receives device-side congestion-control targets (#134①).
+	// Registered via OnTargetBitrate any time before the frame arrives;
+	// nil drops the frame with a debug line. Guarded by mu.
+	onBitrate        func(TunnelBitrate)
 	streams          sync.Map
 	wg               sync.WaitGroup
 	droppedFrames    atomic.Uint64
@@ -290,6 +294,37 @@ func (t *Tunnel) Dial(service string) (net.Conn, error) {
 	return sc, nil
 }
 
+// SetTargetBitrate forwards a congestion-control bitrate target to the
+// media source on the far side (#134①). Client/viewer side: feed the
+// bandwidth estimator's output (the estimator itself — TWCC+GCC wiring —
+// lives in the media stack ports, research doc 11 §1.1). Semantics are
+// latest-wins: no ack, a lost frame costs one update cycle. TargetBps 0
+// tells the agent to hold its current rate. StreamID 0 targets the
+// session's primary media stream.
+func (t *Tunnel) SetTargetBitrate(streamID uint32, targetBps uint32) error {
+	if targetBps > MaxTargetBitrateBps {
+		return fmt.Errorf("tunnel: target_bps %d exceeds ceiling %d", targetBps, MaxTargetBitrateBps)
+	}
+	return t.sendMsg(TunnelMessage{
+		Type: TunnelMessageTypeBitrate,
+		Payload: mustJSON(TunnelBitrate{
+			StreamID:  streamID,
+			TargetBps: targetBps,
+		}),
+	})
+}
+
+// OnTargetBitrate registers the device-side handler for peer bitrate
+// targets (#134①). The agent maps TargetBps onto the camera/NVR encoder
+// (clamp to the encoder's supported range locally). May be assigned any
+// time before the frame arrives; frames without a handler are dropped
+// with a debug line. Passing nil unregisters.
+func (t *Tunnel) OnTargetBitrate(cb func(TunnelBitrate)) {
+	t.mu.Lock()
+	t.onBitrate = cb
+	t.mu.Unlock()
+}
+
 // Close shuts down the tunnel and all active streams.
 func (t *Tunnel) Close() error {
 	select {
@@ -328,6 +363,8 @@ func (t *Tunnel) dispatch(data []byte) {
 		t.handleEcho(msg.Payload)
 	case TunnelMessageTypeEchoResp:
 		t.handleEchoResp(msg.Payload)
+	case TunnelMessageTypeBitrate:
+		t.handleBitrate(msg.Payload)
 	default:
 		// Unknown types are silently ignored (#87/#9 compatibility rule):
 		// a newer peer's probe frames must not spam a legacy peer's logs.
