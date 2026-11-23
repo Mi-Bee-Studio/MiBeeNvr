@@ -239,7 +239,8 @@ func pairKeyOf(snap StatsSnapshot) string {
 // initTelemetryLocked arms per-session telemetry state. Caller holds p.mu
 // (startAsOfferer / startAsAnswerer); the telemetry fields themselves are
 // telMu-guarded so close()'s final report (emitSessionStats holds no p.mu)
-// cannot race a session still mid-setup (main-CI run 42325867875).
+// cannot race a session still mid-setup (NVR main-CI run 42325867875,
+// #128——p.mu→telMu 是唯一嵌套序，无反向持锁).
 func (p *p2pSession) initTelemetryLocked(cfg SignalingConfig, welcome *Welcome) {
 	p.telMu.Lock()
 	p.telOn = !cfg.DisableTelemetry
@@ -333,7 +334,7 @@ func (p *p2pSession) emitSessionStats() {
 // perturb session lifecycle, so errors are swallowed at debug level. Caller
 // holds no locks. p.signal is p.mu-guarded (assigned by the startAs* setup
 // paths) — snapshot it here so a close-path report never reads it bare while
-// an answerer is still mid-setup.
+// an answerer is still mid-setup（#128）.
 func (p *p2pSession) sendTelemetry(report TelemetryReport) {
 	p.mu.Lock()
 	signal := p.signal
@@ -343,5 +344,43 @@ func (p *p2pSession) sendTelemetry(report TelemetryReport) {
 	}
 	if err := signal.sendRaw(MessageTypeTelemetry, report); err != nil {
 		p.log().Debug("telemetry send failed", errorKey, err)
+	}
+}
+
+// notifyPathChange reports nominated-pair changes to the application's
+// OnPathChange callback. This is additive and deliberately independent of
+// telemetry gating (DisableTelemetry) — observability consumers need the
+// timeline even when platform telemetry is off. It reuses pairKeyOf for the
+// exact same pair identity as ice_selected telemetry, but with a separate
+// last key so the two detectors cannot suppress each other.
+// Precision is the OnStats tick (default 5s). Callback runs on the stats
+// collector goroutine; consumers must not block it.
+func (p *p2pSession) notifyPathChange(snap StatsSnapshot) {
+	key := pairKeyOf(snap)
+	if key == "" {
+		return
+	}
+	p.telMu.Lock()
+	if key == p.lastAppPairKey {
+		p.telMu.Unlock()
+		return
+	}
+	prev := p.lastAppPairKey
+	p.lastAppPairKey = key
+	p.telMu.Unlock()
+
+	if prev == "" {
+		return // first nomination is not a "change"
+	}
+	cb := func() func(string, string, string) {
+		if p.owner == nil {
+			return nil
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.owner.OnPathChange
+	}()
+	if cb != nil {
+		cb(snap.SessionID, prev, key)
 	}
 }

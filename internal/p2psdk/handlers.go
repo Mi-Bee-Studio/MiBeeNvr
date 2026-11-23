@@ -52,6 +52,8 @@ func (s *Session) handleMessage(raw []byte) {
 		s.logger.Debug("presence broadcast", typeKey, msg.Type)
 	case MessageTypePeerGone:
 		s.handlePeerGone(msg)
+	case MessageTypeIceRefresh:
+		s.handleIceRefresh(msg)
 	case MessageTypeTelemetry:
 		// Client→server report; unexpected from the server side.
 		s.logger.Debug("unexpected telemetry message")
@@ -114,6 +116,7 @@ func (s *Session) handleConnectRequest(msg *Message) {
 			SessionID:    req.SessionID,
 			TargetPeerID: req.TargetPeerID,
 			ServiceName:  req.ServiceName,
+			Purpose:      req.Purpose, // #136: purpose-aware admission
 		}) {
 		reject := ConnectReject{
 			Code:      RejectCodeDeviceBusy,
@@ -134,17 +137,15 @@ func (s *Session) handleConnectRequest(msg *Message) {
 	// Federation cross-node sessions override the relay endpoint so both
 	// peers share one relay; re-point BEFORE the session copies the client.
 	if req.RelayURL != "" && req.RelayPubKey != "" {
-		s.repointRelay(req.RelayURL, req.RelayPubKey)
+		s.repointRelay(req.RelayURL, req.RelayPubKey, req.RelayTicket)
 	}
 
-	// Caller's relay identity key (mibeescout#16): arming the session
+	// Caller's relay identity key (the relay-identity gap): arming the session
 	// BEFORE the first DataChannel exists is the whole point — on the
 	// direct path the offerer builds the channel ahead of the SDP
 	// exchange, so the historical sdp-offer key carrier is too late and
 	// e2eeKey() would silently return nil (plaintext direct tunnels).
 	var callerRelayKey [32]byte
-	s.logger.Info("connect_request caller relay key",
-		"present", req.CallerRelayPubKey != "", "session_id", req.SessionID)
 	if req.CallerRelayPubKey != "" {
 		if key, err := hex.DecodeString(req.CallerRelayPubKey); err == nil && len(key) == 32 {
 			copy(callerRelayKey[:], key)
@@ -163,8 +164,8 @@ func (s *Session) handleConnectRequest(msg *Message) {
 		owner:          s,
 		onStats:        s.OnStats,
 		relayClient:    s.relayClient,
-		relayIdentity:  s.relayIdentity,
-		ctrlWanted:     req.CtrlChannel, // #88① dual-channel gate (requester-declared)
+		ctrlWanted:     req.CtrlChannel,             // #88① dual-channel gate (requester-declared)
+		purpose:        SessionPurpose(req.Purpose), // #136: symmetric enforcement
 	}
 	// 活跃度锚点=创建时刻：从未承载流量的会话（握手即死）也会被
 	// 空闲清扫按超时回收，而不是永久滞留名册。
@@ -209,7 +210,7 @@ func (s *Session) handleConnectAccept(msg *Message) {
 	// Federation cross-node relay override: re-point before the answer SDP
 	// picks up this session's relay identity.
 	if accept.RelayURL != "" && accept.RelayPubKey != "" {
-		s.repointRelay(accept.RelayURL, accept.RelayPubKey)
+		s.repointRelay(accept.RelayURL, accept.RelayPubKey, accept.RelayTicket)
 		p2p.setRelayClient(s.relayClient)
 	}
 
@@ -413,13 +414,19 @@ var _ = slog.Default
 // repointRelay re-targets the session's fallback-relay connection at a
 // federation cross-node relay endpoint. The previous client is NOT closed:
 // concurrent local sessions may still ride it, and it dies with the Session.
-func (s *Session) repointRelay(serverURL, serverPubKeyHex string) {
-	// Same identity as the announced key (mibeescout#16): the peer routes
-	// and derives E2EE against the key we announced — a fresh keypair would
-	// make that key unroutable on the new node. Symmetric with the Dart
-	// client's repoint, which likewise reuses its keypair.
-	pub, priv := s.relayIdentity.IdentityKeys()
-	rc := relay.NewClientWithIdentity(pub, priv)
+//
+// ticketB64 (#143 v2) is the session ticket minted by the node that injected
+// the override. It must be installed BEFORE Connect: a relay running with
+// ticket_gate on rejects a ticketless client_auth, and the welcome ticket is
+// bound to the WELCOME relay's key, so it cannot be reused at this endpoint.
+func (s *Session) repointRelay(serverURL, serverPubKeyHex, ticketB64 string) {
+	// #162: re-pointing keeps the session identity — the peer was told this
+	// key in connect_request/sdp_*, and the routing key at the new endpoint
+	// must match it or cross-node frames black-hole again.
+	rc := s.newIdentityClient()
+	if tb, terr := relay.TicketFromBase64(ticketB64); terr == nil && len(tb) > 0 {
+		rc.SetTicket(tb)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := rc.Connect(ctx, serverURL, serverPubKeyHex); err != nil {
@@ -431,8 +438,8 @@ func (s *Session) repointRelay(serverURL, serverPubKeyHex string) {
 	// death never triggers a rebuild and the session keeps announcing a
 	// dead key (silent blackhole, no redial); without OnPeerGone it misses
 	// both routing-loss notifications and the server's asymmetric-leg
-	// self-notify. Ownership-checked: once a later repoint
-	// supersedes this client, its death is stale and must not rebuild.
+	// self-notify. #162: they are bound to this client so a superseded
+	// generation cannot drive recovery for its successor.
 	rc.OnFatal(s.relayFatalHook(rc))
 	rc.OnPeerGone(s.relayPeerGoneHook(rc))
 	s.mu.Lock()

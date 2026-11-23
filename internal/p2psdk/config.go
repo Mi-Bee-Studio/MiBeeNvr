@@ -134,7 +134,6 @@ type SignalingConfig struct {
 	// credentials problems. Fired from the dialing goroutine (Dial or the
 	// bounded rebuild loop); keep it non-blocking. Optional.
 	OnRelayConnect func(err error)
-
 	// ForceRelay pins the transport arbitration to the relay path (#82):
 	// the session adopts the relay transport as soon as it is available and
 	// never waits for direct ICE. For sites where direct attempts only
@@ -148,6 +147,15 @@ type SignalingConfig struct {
 	// (nomination changes + a final summary). Privacy-sensitive embedders
 	// can switch it off with no functional impact.
 	DisableTelemetry bool
+	// PlaybackTunnelOnly arms the playback tunnel-only policy (#136, product
+	// decision: 数据本地自治不上云). Sessions with PurposePlayback may only
+	// ride a direct (host/srflx) nominated pair — the WSS relay transport
+	// and TURN-relayed pairs are refused, the session tears down with an
+	// explicit OnPlaybackDegraded notice instead of degrading silently.
+	// Default (false) keeps legacy behavior for every session; flip per
+	// product for the gray release. Live preview keeps the standard chain
+	// (direct → TURN → relay) — the policy is purpose-scoped.
+	PlaybackTunnelOnly bool
 }
 
 // Package-level defaults for timeouts. All are non-zero so an unconfigured

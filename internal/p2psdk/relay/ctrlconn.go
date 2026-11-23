@@ -60,10 +60,11 @@ func (c *Client) dialCtrlLink() {
 	writeTimeout := c.writeTimeout
 	pingInterval := c.pingInterval
 	pongTimeout := c.pongTimeout
+	tlsCfg := c.tlsConfig
 	logger := c.logger()
 	c.mu.Unlock()
 
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, TLSClientConfig: tlsCfg}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	conn, resp, err := dialer.DialContext(ctx, url, nil)
 	cancel()
@@ -103,6 +104,7 @@ func (c *Client) ctrlHandshake(link *ctrlLink, writeTimeout time.Duration) error
 	payload = append(payload, nonce[:]...)
 	payload = append(payload, encrypted...)
 	payload = append(payload, 0x01) // conn_type = ctrl (#88②)
+	payload = appendAuthSuffix(payload, 0x01, c.ticketSnapshot())
 
 	if err := link.writeFrame(encodeFrame(FrameClientAuth, payload), writeTimeout); err != nil {
 		return fmt.Errorf("write auth: %w", err)

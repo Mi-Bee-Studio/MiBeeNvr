@@ -139,5 +139,23 @@ const (
 // stunKey is the slog key "stun".
 const stunKey = "stun"
 
-// candidatesKey is the slog key "candidates".
-const candidatesKey = "candidates"
+// causeKey is the slog key "cause" (#134⑤ degradation trigger).
+const causeKey = "cause"
+
+// lossPctKey is the slog key "loss_pct" (#134⑤ app-fed loss sample).
+const lossPctKey = "loss_pct"
+
+// pathClassKey is the slog key "path_class" (#136 relay/turn/direct).
+const (
+	pathClassKey  = "path_class"
+	candidatesKey = "candidates"
+)
+
+const (
+	// expiresKey / refreshInKey ride the #132 TURN credential refresh log.
+	expiresKey   = "expires_in"
+	refreshInKey = "refresh_in"
+)
+
+// serverNameKey is the slog key "server_name" (TLS SNI under DNS plan A).
+const serverNameKey = "server_name"

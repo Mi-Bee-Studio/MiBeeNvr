@@ -7,11 +7,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,11 +68,30 @@ const (
 	// 0x01 idle reaped, 0x02 rate killed). Session owners should tear down
 	// sessions bound to that key and redial immediately.
 	FramePeerGone byte = 0x0A
+
+	// FrameDstMissing (0x0B, #160): a send_packet was dropped because the
+	// destination key has no data-leg registration on the server's node —
+	// usually a stale relay assignment (this client dialed its nearest node
+	// while the peer registered elsewhere). Payload: [8B key prefix]. Owners
+	// should clear the cached assignment and re-request it; blind retries on
+	// the same assignment keep dropping. Prefix-only by design: the server
+	// never discloses whether the key exists on another node.
+	FrameDstMissing byte = 0x0B
 )
+
+// DstMissingPrefixLen is the FrameDstMissing payload length (#160): an
+// 8-byte destination key prefix.
+const DstMissingPrefixLen = 8
 
 // Close status 4009 (#106-B): the relay is restarting — transient, re-dial
 // on the hinted fast path instead of the exponential ladder.
 const closeStatusRestarting = 4009
+
+// closeStatusReplaced (#162): a newer registration of the SAME client key
+// displaced this connection. This is not a fault — the replacement is
+// already live on the server. A client that treats it as a transport
+// failure rebuilds, gets displaced again, and loops.
+const closeStatusReplaced = 4012
 
 // FramePeerGone reason codes (payload byte after the 32B peer key) —
 // mirror of the server-side values (relay.md §6.2).
@@ -105,9 +127,19 @@ const (
 // Client implements the peer.Transport interface over a WebSocket relay.
 // It connects to a relay server, authenticates with NaCl box, and
 // forwards encrypted packets between peers without server-side decryption.
+//
+// Field order is the fieldalignment optimum (pointer-bearing fields first,
+// then size classes down to the scalar byte) — comments stay with their
+// fields across the reorder; don't hand-tune the sequence back.
 type Client struct {
-	conn      *websocket.Conn
-	onMessage func([]byte)
+	// onDstMissing fires when the server drops a send_packet because the
+	// destination key has no data-leg registration on THAT node (#160). The
+	// usual cause is a stale relay assignment: the caller is dialing its
+	// nearest node while the peer registered elsewhere. Owners should clear
+	// the peer's cached assignment and re-request it (re-welcome). At most
+	// one frame per destination prefix per server-side window; nil = ignored.
+	onDstMissing func(dstPrefix [8]byte)
+	hiCh         chan []byte
 	// routes are per-source inbound handlers: with several P2P sessions
 	// sharing this one relay connection, packets must be dispatched by the
 	// sender's key, not to whichever handler registered last (multi-session
@@ -123,8 +155,13 @@ type Client struct {
 	// to that key and redial; nil = ignored (old behavior: wait out the
 	// pong/idle timeouts).
 	onPeerGone func(peer [32]byte, reason byte)
+	onMessage  func([]byte)
 
 	closeCh chan struct{}
+
+	// ctrl is the #88② physically separate control connection (nil until
+	// the dual-connection dial succeeds; soft-degrades on death).
+	ctrl atomic.Pointer[ctrlLink]
 
 	// Async egress with a control lane (#46): keepalive pings and pong
 	// replies jump the data lane so liveness frames never sit behind bulk
@@ -133,7 +170,7 @@ type Client struct {
 	// be reordered). One writer goroutine performs all socket writes.
 	// #46 v2 adds the high lane for priority-marked frames (negotiated).
 	ctrlCh chan []byte
-	hiCh   chan []byte
+	conn   *websocket.Conn
 	dataCh chan []byte
 
 	// writeSync substitutes the socket-write primitive in tests.
@@ -141,32 +178,36 @@ type Client struct {
 
 	// logger is nil-safe diagnostics output (defaults to slog.Default()).
 	loggerField *slog.Logger
-	// ctrl is the #88② physically separate control connection (nil until
-	// the dual-connection dial succeeds; soft-degrades on death).
-	ctrl atomic.Pointer[ctrlLink]
-	// serverURL remembers the endpoint for the #88② ctrl dial. Kept last
-	// among the pointers: its trailing string-len word falls out of the
-	// GC-scanned prefix (fieldalignment).
+	// serverURL remembers the endpoint for the #88② ctrl dial.
 	serverURL string
+	// tlsConfig overrides the TLS config used for both the data and ctrl
+	// dials. DNS plan A needs it: the client dials a bare IP while presenting
+	// the region domain as SNI, so the default (SNI = dialed host) cannot
+	// validate the shared certificate.
+	tlsConfig *tls.Config
+	// ticket is the optional #143 session ticket (raw bytes, base64-decoded
+	// from the Welcome relay_ticket grant). When set, BOTH the data and the
+	// ctrl client_auth append [conn_type][2B len][ticket]; servers without
+	// the feature ignore trailing bytes, so the suffix is always safe.
+	ticket []byte
 
-	pubKey       [32]byte
+	// Liveness knobs (overridable in tests). Defaults below.
+	pongTimeout  time.Duration
+	lastRead     atomic.Int64 // unix nanos of the last inbound frame
+	dataBytes    atomic.Int64 // bytes queued on the data lanes
+	pingInterval time.Duration
+	writeTimeout time.Duration
+
+	// fatalOnce gates the single fatal teardown.
+	fatalOnce sync.Once
+
+	mu      sync.Mutex
+	writeMu sync.Mutex
+
 	privKey      [32]byte
 	serverPubKey [32]byte
 	remotePubKey [32]byte
-
-	mu        sync.Mutex
-	writeMu   sync.Mutex
-	lastRead  atomic.Int64 // unix nanos of the last inbound frame
-	dataBytes atomic.Int64 // bytes queued on the data lanes
-
-	// Liveness knobs (overridable in tests). Defaults below.
-	pingInterval time.Duration
-	pongTimeout  time.Duration
-	writeTimeout time.Duration
-
-	// fatalOnce gates the single fatal teardown; the 12-byte sync.Once
-	// packs with serverCaps in the struct tail (fieldalignment).
-	fatalOnce sync.Once
+	pubKey       [32]byte
 	// serverCaps carries the capability byte from server_auth (0 when the
 	// server is legacy 1-byte). Governed by mu; governs SendPriority gating.
 	serverCaps byte
@@ -230,6 +271,24 @@ func (e *RestartingError) Error() string {
 	return fmt.Sprintf("relay restarting (retry after %s)", e.RetryAfter)
 }
 
+// ReplacedError reports a same-key takeover (#162): a newer connection for
+// this client's own public key displaced it (close 4012). The replacement
+// is already registered server-side, so callers must NOT rebuild — the
+// correct response is to let the newer connection own the key. Tearing down
+// the sessions that rode the displaced connection is still right: their
+// frames were being sent on a socket the server no longer reads.
+type ReplacedError struct{}
+
+func (*ReplacedError) Error() string {
+	return "relay connection replaced by re-auth (superseded by a newer connection for this key)"
+}
+
+// IsReplaced reports whether err is a same-key takeover (#162).
+func IsReplaced(err error) bool {
+	var re *ReplacedError
+	return errors.As(err, &re)
+}
+
 // defaultRestartingRetryAfter is used when the 4009 close arrives without
 // a preceding FrameRestarting (ctrl lane happened to drop it).
 const defaultRestartingRetryAfter = 2 * time.Second
@@ -244,28 +303,30 @@ func RetryHint(err error) (time.Duration, bool) {
 	return 0, false
 }
 
-// NewClient creates an unconnected relay client.
+// NewClient creates an unconnected relay client with a freshly minted
+// identity keypair.
 func NewClient() *Client {
-	// Identity keys are minted EAGERLY (mibeescout#16): the caller's relay
-	// public key must be available before any relay connection exists —
-	// it rides connect_request to arm direct-path E2EE. A Client's relay
-	// identity is now stable across reconnects, matching the server-side
-	// static-key semantics (#55).
 	pub, priv := GenerateKeyPair()
 	return NewClientWithIdentity(pub, priv)
 }
 
-// NewClientWithIdentity creates an unconnected relay client bound to a
-// CALLER-SUPPLIED identity keypair (mibeescout#16 device-side half).
+// NewClientWithIdentity creates an unconnected relay client using a caller
+// supplied identity keypair (#162).
 //
-// Why it exists: the session layer mints its relay identity once and
-// announces it in SDP/connect_request before any relay connection exists.
-// When the dial is retried (rebuild) or re-pointed (federation cross-node),
-// the re-connecting client MUST keep that same identity — the peer already
-// armed its tunnel E2EE and its routing key against the announced public
-// key. A fresh keypair would make every announced key stale (peer frames
-// drop, E2EE derives mismatched keys on both sides).
-func NewClientWithIdentity(pubKey, privKey [32]byte) *Client {
+// Why this exists: the relay identity is what peers announce to each other
+// (connect_request / sdp_offer / sdp_answer relay_pub_key) and what the
+// server keys its routing registry on. When every re-dial mints a new
+// keypair, the announced key drifts across rebuilds — the peer keeps
+// addressing a key that no longer has a registration, and the server's
+// same-key takeover never sees the re-dial as "the same client". Injecting
+// the keypair lets the session hold ONE identity for its whole lifetime
+// (announced key == routing key, stable across rebuild and relay
+// re-pointing).
+//
+// A zero private key is rejected: an all-zero identity would collide with
+// every other unbound client's zero-key registration. Use NewClient() when
+// no stable identity is required.
+func NewClientWithIdentity(pub, priv [32]byte) *Client {
 	c := &Client{
 		closeCh:      make(chan struct{}),
 		ctrlCh:       make(chan []byte, clientCtrlQueueFrames),
@@ -275,17 +336,18 @@ func NewClientWithIdentity(pubKey, privKey [32]byte) *Client {
 		pongTimeout:  defaultPongTimeout,
 		writeTimeout: defaultWriteTimeout,
 
-		pubKey:  pubKey,
-		privKey: privKey,
+		pubKey:  pub,
+		privKey: priv,
 	}
 	return c
 }
 
-// IdentityKeys returns the client's relay identity keypair (public,
-// private). Callers use it with NewClientWithIdentity to re-key a fresh
-// client with the SAME identity across dial rebuilds / federation
-// re-points — see that constructor for why the identity must not change.
-func (c *Client) IdentityKeys() (pubKey, privKey [32]byte) {
+// IdentityKeys returns the client's relay identity keypair. Callers that
+// need to rebuild a transport without changing the announced key hand both
+// halves back to NewClientWithIdentity (#162).
+func (c *Client) IdentityKeys() (pub, priv [32]byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.pubKey, c.privKey
 }
 
@@ -300,7 +362,14 @@ func (c *Client) SetRemotePeer(pubKey [32]byte) {
 
 // SendTo sends data to an explicit remote peer. This is the multi-session
 // safe form: the destination is a parameter, not shared client state.
+//
+// A zero dst is rejected at the boundary (#152 pattern ①): unbound or
+// torn-down sessions used to ship frames with an all-zero destination
+// prefix, which the server relays to nobody and drops silently.
 func (c *Client) SendTo(dst [32]byte, data []byte) error {
+	if dst == ([32]byte{}) {
+		return errors.New("relay send: zero destination key (session not bound or already cleared)")
+	}
 	if len(data) > MaxPacketSize-KeyLen {
 		return fmt.Errorf("payload too large: %d", len(data))
 	}
@@ -448,6 +517,15 @@ func (c *Client) RemovePacketRoute(src [32]byte) {
 
 // Connect dials the relay WebSocket and authenticates with NaCl box.
 // serverURL must be ws:// or wss://. serverPubKeyHex is the hex-encoded
+// SetTLSConfig overrides the TLS configuration used for the data and control
+// dials. Required under DNS plan A when dialing a bare IP while presenting the
+// region domain as SNI. Must be called before Connect.
+func (c *Client) SetTLSConfig(cfg *tls.Config) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tlsConfig = cfg
+}
+
 // X25519 public key of the relay server (from Welcome.RelayPubKey).
 func (c *Client) Connect(ctx context.Context, serverURL string, serverPubKeyHex string) error {
 	keyBytes, err := hex.DecodeString(serverPubKeyHex)
@@ -461,6 +539,7 @@ func (c *Client) Connect(ctx context.Context, serverURL string, serverPubKeyHex 
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
+		TLSClientConfig:  c.tlsConfig,
 	}
 	conn, resp, err := dialer.DialContext(ctx, serverURL, nil)
 	if err != nil {
@@ -509,6 +588,58 @@ func (c *Client) DeriveE2EEKey(remotePub [32]byte) ([32]byte, error) {
 	return e2ee.DeriveSessionKey(priv, pub, remotePub)
 }
 
+// SetTicket installs the #143 session ticket (raw bytes from the Welcome
+// relay_ticket grant, base64-decoded). Call before Connect; both the data
+// and the ctrl handshake then append the ticket suffix. Servers without the
+// feature ignore trailing client_auth bytes, so setting a ticket against an
+// old server is harmless.
+func (c *Client) SetTicket(ticket []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ticket = ticket
+}
+
+// ticketSnapshot reads the ticket under the lock for the ctrl handshake.
+func (c *Client) ticketSnapshot() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ticket
+}
+
+// appendAuthSuffix appends the #143 client_auth suffix: the conn_type byte
+// (0x00 data / 0x01 ctrl) plus the 2-byte BE length and the ticket bytes.
+// The conn_type byte is part of the encoding contract - the server only
+// looks for a ticket after it, keeping bare 109/110-byte legacy frames
+// unambiguous.
+func appendAuthSuffix(payload []byte, connType byte, ticket []byte) []byte {
+	// Length guard: the suffix encodes the size in 2 bytes, and no frame
+	// can carry a 64KiB+ ticket anyway (MaxPacketSize). Dropping the suffix
+	// makes the server reject a bare auth with a clear "missing ticket"
+	// instead of corrupting the frame with a truncated length.
+	if len(ticket) == 0 || len(ticket) > math.MaxUint16 {
+		return payload
+	}
+	var l [2]byte
+	//nolint:gosec // G115: bounded above — oversize tickets drop the suffix instead of truncating
+	n := uint16(len(ticket))
+	binary.BigEndian.PutUint16(l[:], n)
+
+	payload = append(payload, connType)
+	payload = append(payload, l[:]...)
+	payload = append(payload, ticket...)
+	return payload
+}
+
+// TicketFromBase64 decodes a Welcome relay_ticket grant into the raw bytes
+// SetTicket expects. Empty input returns nil (no ticket), matching servers
+// without the feature.
+func TicketFromBase64(s string) ([]byte, error) {
+	if s == "" {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(s)
+}
+
 // authenticate performs NaCl box-based authentication with the relay server.
 func (c *Client) authenticate(_ context.Context) error {
 	var nonce [NonceLen]byte
@@ -518,10 +649,11 @@ func (c *Client) authenticate(_ context.Context) error {
 
 	encrypted := box.Seal(nil, c.pubKey[:], &nonce, &c.serverPubKey, &c.privKey)
 
-	payload := make([]byte, KeyLen+NonceLen+len(encrypted))
-	copy(payload[:KeyLen], c.pubKey[:])
-	copy(payload[KeyLen:KeyLen+NonceLen], nonce[:])
-	copy(payload[KeyLen+NonceLen:], encrypted)
+	payload := make([]byte, 0, KeyLen+NonceLen+len(encrypted)+3+len(c.ticket))
+	payload = append(payload, c.pubKey[:]...)
+	payload = append(payload, nonce[:]...)
+	payload = append(payload, encrypted...)
+	payload = appendAuthSuffix(payload, 0x00, c.ticket)
 
 	frame := encodeFrame(FrameClientAuth, payload)
 	if err := c.writeFrame(frame); err != nil {
@@ -615,6 +747,13 @@ func (c *Client) readLoop() {
 				c.fail(&RestartingError{RetryAfter: defaultRestartingRetryAfter})
 				return
 			}
+			// #162: same-key takeover. The replacement is already live —
+			// surface it as a distinct type so the session does not rebuild
+			// (rebuilding would displace the winner and loop).
+			if websocket.IsCloseError(err, closeStatusReplaced) {
+				c.fail(&ReplacedError{})
+				return
+			}
 			c.fail(fmt.Errorf("relay read: %w", err))
 			return
 		}
@@ -647,21 +786,51 @@ func (c *Client) readLoop() {
 
 		case FramePeerGone:
 			// #106-B: [32B peer key][1B reason].
-			if len(payload) < KeyLen+1 {
-				continue
-			}
-			var peer [32]byte
-			copy(peer[:], payload[:KeyLen])
-			c.mu.Lock()
-			h := c.onPeerGone
-			c.mu.Unlock()
-			if h != nil {
-				h(peer, payload[KeyLen])
-			}
+			c.handlePeerGoneFrame(payload)
+
+		case FrameDstMissing:
+			// #160: destination key prefix; see handleDstMissingFrame.
+			c.handleDstMissingFrame(payload)
 
 		default:
 			// Unknown frames ignored.
 		}
+	}
+}
+
+// handlePeerGoneFrame dispatches FramePeerGone — [32B peer key][1B reason]
+// (#106-B): a recently-routed peer's connection ended. Session owners tear
+// down sessions bound to that key and redial.
+func (c *Client) handlePeerGoneFrame(payload []byte) {
+	if len(payload) < KeyLen+1 {
+		return
+	}
+	var peer [32]byte
+	copy(peer[:], payload[:KeyLen])
+	c.mu.Lock()
+	h := c.onPeerGone
+	c.mu.Unlock()
+	if h != nil {
+		h(peer, payload[KeyLen])
+	}
+}
+
+// handleDstMissingFrame dispatches FrameDstMissing — [8B destination key
+// prefix] (#160): a send_packet was dropped for lack of a local data-leg
+// registration, so the caller's relay assignment is likely stale (the peer
+// registered on another node). Owners clear the peer's cached assignment and
+// re-request it (re-welcome).
+func (c *Client) handleDstMissingFrame(payload []byte) {
+	if len(payload) < DstMissingPrefixLen {
+		return
+	}
+	var prefix [DstMissingPrefixLen]byte
+	copy(prefix[:], payload[:DstMissingPrefixLen])
+	c.mu.Lock()
+	h := c.onDstMissing
+	c.mu.Unlock()
+	if h != nil {
+		h(prefix)
 	}
 }
 
@@ -775,6 +944,9 @@ func (c *Client) SendPriorityTo(dst [32]byte, data []byte) error {
 	if !c.SupportsPriority() {
 		return c.SendTo(dst, data)
 	}
+	if dst == ([32]byte{}) {
+		return errors.New("relay priority send: zero destination key (session not bound or already cleared)")
+	}
 	// #88②: the physically separate ctrl connection beats any shared-lane
 	// queueing when live; its death degrades to the path below.
 	if c.sendViaCtrl(dst, data) {
@@ -827,6 +999,20 @@ func (c *Client) OnPeerGone(h func(peer [32]byte, reason byte)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onPeerGone = h
+}
+
+// OnDstMissing registers the destination-missing callback (#160): the server
+// sends FrameDstMissing when a send_packet was dropped because the
+// destination key had no data-leg registration on that node. The payload
+// carries only an 8-byte prefix — the server never reveals whether the key
+// exists elsewhere, so this is a "your assignment looks stale" signal, not a
+// existence verdict. Owners should drop the cached relay assignment for the
+// peer behind that prefix and re-request it from the signaling side; blind
+// retries on the same assignment will keep dropping.
+func (c *Client) OnDstMissing(h func(dstPrefix [8]byte)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onDstMissing = h
 }
 
 // Close shuts down the relay client and releases resources.

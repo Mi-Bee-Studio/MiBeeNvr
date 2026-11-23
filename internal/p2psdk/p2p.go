@@ -6,12 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"net"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/e2ee"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/relay"
 )
 
@@ -47,11 +54,6 @@ type p2pSession struct {
 	ctrlRaw     *webrtc.DataChannel
 	graceTimer  *time.Timer
 	relayClient *relay.Client
-	// relayIdentity is the session-stable announced key (mibeescout#16):
-	// exists even when relayClient is nil (dial gated/failed/pending).
-	// Offer/answer/e2ee derivation use it; CONNECTED-transport decisions
-	// (fallback, ForceRelay adoption) keep using relayClient.
-	relayIdentity *relay.Client
 	// ctrlDC holds the wrapped lossy control channel once open; nil
 	// otherwise. Guarded by mu.
 	ctrlDC       *DataChannel
@@ -86,27 +88,37 @@ type p2pSession struct {
 	// (SignalingConfig.DisableTelemetry); iceTags attributes the selected
 	// path; lastPairKey/lastSnap carry change detection; startedAt (moved
 	// beside recoveryStart — same alignment class, fieldalignment) and
-	// closeReason feed the final session_stats report. telOn/iceTags/startedAt
-	// are telMu-guarded (written once by initTelemetryLocked, which callers
-	// invoke under p.mu — close()'s report path holds no p.mu and must not
-	// race a session still mid-setup).
-	telOn       bool
-	iceTags     *iceTagIndex
-	telMu       sync.Mutex
-	lastPairKey string
-	lastSnap    StatsSnapshot
-	closeReason string
+	// closeReason feed the final session_stats report.
+	telOn          bool
+	iceTags        *iceTagIndex
+	telMu          sync.Mutex
+	lastPairKey    string
+	lastAppPairKey string // OnPathChange detector (independent of telemetry)
+	lastSnap       StatsSnapshot
+	closeReason    string
 	// #88①: ctrlWanted mirrors the requester's ctrl_channel declaration
 	// (offerer gate — an old requester never sees a second channel).
 	ctrlWanted bool
 	isOfferer  bool
+	// purpose is the session's business purpose (ConnectOptions.Purpose /
+	// connect_request purpose, #136). Immutable after creation — no lock
+	// needed.
+	purpose SessionPurpose
+	// Link-quality fast-switch state (#134⑤): linkLoss is the latest
+	// app-fed loss sample (atomic — fed from ReportLinkQuality);
+	// linkStreak/linkEscalations/linkLastEscalation are escalation
+	// bookkeeping (Guarded by mu).
+	linkLoss           atomic.Pointer[linkQuality]
+	linkStreak         int
+	linkEscalations    int
+	linkLastEscalation time.Time
+	// playbackDegradedOnce deduplicates #136 degradation to exactly one
+	// event + teardown per session (multiple enforcement points may
+	// observe the same violation).
+	playbackDegradedOnce sync.Once
 	// Relay fallback fields.
 	relayActive  bool // true once relay transport was adopted; ICE restarts are then moot
 	iceConnected bool // last known ICE connection state (liveness gate for retries)
-	// e2eeWarnOnce gates the plaintext-tunnel WARN: a session may deliver
-	// its channel and re-derive multiple times, but the operator only
-	// needs to hear about a plaintext tunnel once (mibeescout#16).
-	e2eeWarnOnce sync.Once
 }
 
 // startAsOfferer creates a PeerConnection and DataChannel (as offerer).
@@ -186,9 +198,10 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	offerMsg := SDPOffer{
 		SessionID: p.sessionID, SDP: finalOffer.SDP,
 	}
-	// Announce the session-stable IDENTITY key — see announcedRelayKey
-	// (mibeescout#16).
-	if pk, ok := p.announcedRelayKey(); ok {
+	// #162: announce the SESSION relay identity, not the live client's key.
+	// The identity is minted at Dial and reused by every rebuild/re-point,
+	// so the announced key stops drifting when the transport is replaced.
+	if pk, ok := p.owner.relayIdentityPub(); ok {
 		offerMsg.RelayPubKey = hex.EncodeToString(pk[:])
 	}
 	if sendErr := signal.sendRaw(MessageTypeSDPOffer, offerMsg); sendErr != nil {
@@ -244,7 +257,7 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 			)
 			if cb := p.owner.dataChannelCallback(); cb != nil {
 				wdc := p.activityDataChannel(wrapDataChannel(dc))
-				p.armE2EE(&wdc)
+				wdc.E2EEKey = p.e2eeKey()
 				if ctrl != nil {
 					wdc.Ctrl = ctrl // #88① pair (may have arrived earlier)
 				}
@@ -291,7 +304,7 @@ func (p *p2pSession) dataChannelOpenHandler(signal *signalingClient, cfg Signali
 		p.mu.Unlock()
 		if cb := p.owner.dataChannelCallback(); cb != nil {
 			wdc := p.activityDataChannel(wrapDataChannel(dc))
-			p.armE2EE(&wdc)
+			wdc.E2EEKey = p.e2eeKey()
 			// #88①: pair the lossy ctrl channel with the data channel so
 			// the transport layer can route control frames off the ordered
 			// lane. Wrap order: data first, ctrl attached before delivery.
@@ -357,27 +370,11 @@ func (p *p2pSession) handleRemoteOffer(sdp string, signal *signalingClient) erro
 	answerMsg := SDPAnswer{
 		SessionID: p.sessionID, SDP: finalAnswer.SDP,
 	}
-	// Identity key announcement — see announcedRelayKey (mibeescout#16).
-	if pk, ok := p.announcedRelayKey(); ok {
+	// #162: same rule as the offer — announce the stable session identity.
+	if pk, ok := p.owner.relayIdentityPub(); ok {
 		answerMsg.RelayPubKey = hex.EncodeToString(pk[:])
 	}
 	return signal.sendRaw(MessageTypeSDPAnswer, answerMsg)
-}
-
-// announcedRelayKey returns the relay identity public key to announce in
-// SDP offer/answer and whether to announce it at all.
-//
-// The IDENTITY key (session-stable, mibeescout#16) — not the connected
-// client's: the peer arms tunnel E2EE and aims its routing key at this
-// value, so it must exist even while the relay dial is gated/failed/
-// pending. Gated on relay intent — with no relay to ever register on, an
-// announced key would be a permanently unroutable destination, actively
-// misleading the peer's forced-relay path.
-func (p *p2pSession) announcedRelayKey() ([32]byte, bool) {
-	if p.owner.relayIntent() && p.relayIdentity != nil {
-		return p.relayIdentity.PubKey(), true
-	}
-	return [32]byte{}, false
 }
 
 // handleRemoteAnswer processes an incoming SDP answer (for offerer).
@@ -600,8 +597,11 @@ func (p *p2pSession) startStatsCollectorLocked(pc *webrtc.PeerConnection) {
 	sid := p.sessionID
 	p.statsCollector.OnStats = func(snap StatsSnapshot) {
 		snap.SessionID = sid
+		p.checkPlaybackPolicy(snap)
 		p.checkPathEviction(snap)
+		p.checkLinkQuality(snap)
 		p.maybeSendIceSelected(snap)
+		p.notifyPathChange(snap)
 		if p.onStats != nil {
 			p.onStats(snap)
 		}
@@ -621,6 +621,12 @@ func (p *p2pSession) watchTransport(signal *signalingClient, cfg SignalingConfig
 	p.mu.Unlock()
 
 	if cfg.ForceRelay && rc != nil {
+		// #136: a relay-pinned playback session is a policy violation by
+		// construction — degrade explicitly instead of adopting.
+		if p.playbackTunnelOnlyArmed() {
+			p.degradePlayback(PlaybackDegradedNoDirect)
+			return
+		}
 		// #82: relay pinned by the application — adopt the relay transport
 		// without waiting for the direct arbitration. A direct DataChannel
 		// may still open (even on a pathological pair); the adoption
@@ -642,6 +648,12 @@ func (p *p2pSession) watchTransport(signal *signalingClient, cfg SignalingConfig
 	}
 
 	// ICE timed out — use relay transport.
+	// #136: playback sessions have no policy-legal path left — explicit
+	// degradation instead of silent relay adoption.
+	if p.playbackTunnelOnlyArmed() {
+		p.degradePlayback(PlaybackDegradedNoDirect)
+		return
+	}
 	p.adoptRelayTransport(signal, cfg, rc)
 }
 
@@ -659,7 +671,7 @@ func (p *p2pSession) adoptRelayTransport(signal *signalingClient, cfg SignalingC
 	p.log().Info("using relay transport", sessionIDKey, p.sessionID, pinnedKey, cfg.ForceRelay)
 
 	dc := p.activityDataChannel(ch.dataChannel())
-	p.armE2EE(&dc)
+	dc.E2EEKey = p.e2eeKey()
 	if cb := p.owner.dataChannelCallback(); cb != nil {
 		cb(dc)
 	}
@@ -694,42 +706,32 @@ func (p *p2pSession) kickRelay() {
 }
 
 // e2eeKey derives the tunnel E2EE session key for this peer session: our
-// relay keypair combined with the remote peer's relay public key (received
-// via sdp_offer/sdp_answer). Returns nil when either side's key is missing
-// (e.g. relay never connected) — tunnel then runs unencrypted, exactly as
+// relay identity keypair combined with the remote peer's relay public key
+// (received via connect_request/sdp_offer/sdp_answer). Returns nil when
+// either side's key is missing — tunnel then runs unencrypted, exactly as
 // before E2EE existed.
+//
+// #162: derived from the SESSION identity, not from the live relay client.
+// Derivation is pure math over the keypair, so it works while the relay
+// transport is down, still connecting, or rejected by a ticket gate —
+// exactly the windows where a direct path may still be established.
 func (p *p2pSession) e2eeKey() []byte {
 	p.mu.Lock()
-	rc := p.relayIdentity
 	remote := p.remoteRelayKey
 	p.mu.Unlock()
-	// Derivation is pure key math (X25519) — it needs the identity keypair
-	// and the remote public key, NOT a live relay connection (mibeescout#16
-	// device-side half: this is what lets direct-path sessions arm E2EE
-	// while the relay leg is gated/failed/pending).
-	if rc == nil || remote == [32]byte{} {
+	if remote == [32]byte{} {
 		return nil
 	}
-	key, err := rc.DeriveE2EEKey(remote)
+	pub, priv, ok := p.owner.relayIdentityKeys()
+	if !ok {
+		return nil
+	}
+	key, err := e2ee.DeriveSessionKey(priv, pub, remote)
 	if err != nil {
 		p.log().Warn("e2ee key derivation failed", errorKey, err)
 		return nil
 	}
 	return key[:]
-}
-
-// armE2EE installs the tunnel E2EE session key on a channel about to be
-// delivered to the application. When the key cannot be derived (either
-// side's relay key material missing) the tunnel silently runs plaintext —
-// a one-time WARN per session makes that observable in device logs instead
-// of only via App diagnostics (mibeescout#16).
-func (p *p2pSession) armE2EE(dc *DataChannel) {
-	dc.E2EEKey = p.e2eeKey()
-	if len(dc.E2EEKey) == 0 {
-		p.e2eeWarnOnce.Do(func() {
-			p.log().Warn("tunnel e2ee not armed, session runs plaintext (missing key material)")
-		})
-	}
 }
 
 // relaySessionChannel is one session's view of the shared relay client.
@@ -810,6 +812,259 @@ func (r *relaySessionChannel) sessionClosed() {
 }
 
 // ── PeerConnection factory ──────────────────────────────────────────────────
+
+// stunURLs flattens the Welcome's ICE server URLs (STUN entries only).
+func stunURLs(welcome *Welcome) []string {
+	if welcome == nil {
+		return nil
+	}
+	var urls []string
+	for _, srv := range welcome.ICEServers {
+		for _, u := range srv.URLs {
+			if strings.HasPrefix(u, "stun:") {
+				urls = append(urls, u)
+			}
+		}
+	}
+	return urls
+}
+
+// applyICETuning installs the optional ICE timer/MTU overrides from
+// SignalingConfig onto the SettingEngine (must run before NewPeerConnection;
+// pion ignores later changes). Zero ICETimeouts struct = untouched engine
+// (byte-identical behavior to the pre-knob build); individual zero fields
+// fall back to the pion/ice defaults recorded next to ICETimeouts.
+func applyICETuning(se *webrtc.SettingEngine, cfg SignalingConfig) {
+	if to := cfg.ICETimeouts; to != (ICETimeouts{}) {
+		ka, disc, failed := to.KeepaliveInterval, to.DisconnectedTimeout, to.FailedTimeout
+		if ka == 0 {
+			ka = ICEDefaultKeepaliveInterval
+		}
+		if disc == 0 {
+			disc = ICEDefaultDisconnectedTimeout
+		}
+		if failed == 0 {
+			failed = ICEDefaultFailedTimeout
+		}
+		se.SetICETimeouts(disc, failed, ka)
+	}
+	if cfg.ICEReceiveMTU > 0 {
+		se.SetReceiveMTU(uint(cfg.ICEReceiveMTU)) //nolint:gosec // G115: validated ≤65535 at config layer
+	}
+}
+
+// sctpRTOMaxDefault caps the SCTP retransmission-timeout ceiling. pion's
+// stock ceiling is RFC-4960-scale (seconds); on healthy low-RTT paths one
+// spurious no-progress event then parks the sender for hundreds of
+// milliseconds per occurrence (#109: the fleet 63.52→62.40 direction
+// measured 17–23 such stalls per 3.3MB leg, 81→20 Mbps, while RTT/loss
+// stayed flat and the reverse direction stayed clean). A 600ms ceiling
+// bounds the wait and restored full throughput in the on-path bench
+// matrix (6/6 legs, zero stalls); it stays above any realistic P2P RTT so
+// it cannot push RTO below path RTT. MIBEE_SCTP_RTO_MAX_MS overrides the
+// value; setting it to 0 restores stock pion behavior.
+const sctpRTOMaxDefault = 600 * time.Millisecond
+
+func envDurationMs(name string) time.Duration {
+	v := os.Getenv(name)
+	if v == "" {
+		return -1
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return time.Duration(n) * time.Millisecond
+}
+
+func envUint32(name string) (uint32, bool) {
+	v := os.Getenv(name)
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || int64(n) > math.MaxUint32 {
+		return 0, false
+	}
+	return uint32(n), true //nolint:gosec // G115: bounds checked above
+}
+
+// iceRenominationDefault: automatic renomination interval. #104 A/B
+// (2026-10-25, mesh fleet 62.40↔63.52, netem delay 150ms/loss 20% on the
+// nominated direct pair): renomination OFF pinned the session to the degraded
+// pair (RTT p50 152ms, throughput 0, three failed cycles, recovery only via
+// linktest's dead-streak rebuild); ON switched to the peer's other healthy
+// host pair within one cycle (RTT 2.4ms, 60-86 Mbps, no session rebuild).
+// Default ON at 3s (browser-scale re-evaluation); MIBEE_ICE_RENOMINATION_MS=0
+// disables, N>0 overrides the interval.
+const iceRenominationDefault = 3000 * time.Millisecond
+
+// applyICERenomination installs automatic renomination
+// (#104 task 2, draft-thatcher-ice-renomination): the controlling side
+// re-evaluates candidate pairs and switches to a better one without a full
+// ICE restart — quality-triggered path adaptation (the restart/abandon ladder
+// stays as the failure-triggered backstop). Interop: controlling-side
+// behavior only; the extra STUN attribute (0xC001) is ignored by
+// RFC-compliant agents that don't know the draft, and controlled/non-pion
+// peers just see ordinary nominations — no SDP negotiation involved.
+func applyICERenomination(se *webrtc.SettingEngine, logger *slog.Logger) {
+	d := envDurationMs("MIBEE_ICE_RENOMINATION_MS")
+	switch {
+	case d == 0: // explicit off
+		return
+	case d < 0: // unset/invalid → default
+		d = iceRenominationDefault
+	}
+	// logger may be nil（newPeerConnection 的测试路径传 nil——对齐包内
+	// 其它 nil-safe 日志约定）。
+	if err := se.SetICERenomination(webrtc.WithRenominationInterval(d)); err != nil {
+		if logger != nil {
+			logger.Warn("ice renomination enable failed", errKey, err)
+		}
+	} else if logger != nil {
+		logger.Info("ice automatic renomination enabled", intervalMsKey, d.Milliseconds())
+	}
+}
+
+func applySCTPHardening(se *webrtc.SettingEngine) {
+	if d := envDurationMs("MIBEE_SCTP_RTO_MAX_MS"); d >= 0 {
+		se.SetSCTPRTOMax(d)
+	} else {
+		se.SetSCTPRTOMax(sctpRTOMaxDefault)
+	}
+	// Experimental knobs for fleet A/B benching (#109 matrix), unset by
+	// default: MinCwnd / FastRtxWnd / CwndCAStep.
+	if n, ok := envUint32("MIBEE_SCTP_MIN_CWND"); ok {
+		se.SetSCTPMinCwnd(n)
+	}
+	if n, ok := envUint32("MIBEE_SCTP_FAST_RTX"); ok {
+		se.SetSCTPFastRtxWnd(n)
+	}
+	if n, ok := envUint32("MIBEE_SCTP_CA_STEP"); ok {
+		se.SetSCTPCwndCAStep(n)
+	}
+}
+
+func newPeerConnection(cfg SignalingConfig, welcome *Welcome, logger *slog.Logger) (*webrtc.PeerConnection, error) {
+	config := webrtc.Configuration{
+		BundlePolicy:  webrtc.BundlePolicyMaxBundle,
+		RTCPMuxPolicy: webrtc.RTCPMuxPolicyRequire,
+	}
+
+	if welcome != nil && len(welcome.ICEServers) > 0 {
+		filtered := filterWelcomeICE(welcome, cfg.ICEProviderTags)
+		iceServers := make([]webrtc.ICEServer, 0, len(filtered))
+		// ICEProviderTags can pin the session to specific providers
+		// (linktest A/B: force all relay attempts through one external
+		// TURN). Unfiltered = every entry, ordering untouched.
+		for _, srv := range filtered {
+			is := webrtc.ICEServer{URLs: srv.URLs}
+			if srv.Username != "" {
+				is.Username = srv.Username
+				is.Credential = srv.Credential
+				is.CredentialType = webrtc.ICECredentialTypePassword
+			}
+			iceServers = append(iceServers, is)
+		}
+		config.ICEServers = iceServers
+	}
+
+	se := hardenedSettingEngine("")
+	applyICETuning(&se, cfg)
+	applyICERenomination(&se, logger)
+	applySCTPHardening(&se)
+	// "auto"/"auto:N" resolve per session build via the UPnP→STUN ladder
+	// (autoendpoint.go); resolution failure degrades to "" (no advertisement,
+	// stock ICE + relay fallback) rather than failing the connection. Ladder
+	// execution and per-rung failures are logged (fresh runs only).
+	res := resolveAdvertiseDetailed(cfg.AdvertiseAddr, stunURLs(welcome))
+	logAdvertiseResolution(logger, res)
+	if err := applyAdvertiseAddr(&se, res.addr); err != nil {
+		return nil, err
+	}
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
+	return api.NewPeerConnection(config)
+}
+
+// applyAdvertiseAddr turns SignalingConfig.AdvertiseAddr into pion settings:
+// a single-port ephemeral range pins every host-candidate socket to the
+// advertised port, and NAT1To1 host mode replaces host addresses with the
+// public IP. mDNS is disabled explicitly — its .local candidate advertising
+// is mutually exclusive with NAT1To1 host mode.
+func applyAdvertiseAddr(se *webrtc.SettingEngine, advertiseAddr string) error {
+	if advertiseAddr == "" {
+		return nil
+	}
+	host, portStr, err := net.SplitHostPort(advertiseAddr)
+	if err != nil {
+		return fmt.Errorf("advertise_addr %q: %w", advertiseAddr, err)
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil || port == 0 {
+		return fmt.Errorf("advertise_addr %q: udp port must be 1-65535", advertiseAddr)
+	}
+	if pinErr := se.SetEphemeralUDPPortRange(uint16(port), uint16(port)); pinErr != nil {
+		return fmt.Errorf("advertise_addr %q: pin port: %w", advertiseAddr, pinErr)
+	}
+	//nolint:staticcheck // SA1019: pion deprecates SetNAT1To1IPs in favor of
+	// SetICEAddressRewriteRules, but the rewrite rules change mDNS/candidate
+	// semantics; migrating is a deliberate behavior change, not a lint fix.
+	se.SetNAT1To1IPs([]string{host}, webrtc.ICECandidateTypeHost)
+	se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	return nil
+}
+
+// ── DataChannel wrapper ─────────────────────────────────────────────────────
+
+func wrapDataChannel(dc *webrtc.DataChannel) DataChannel {
+	var mu sync.Mutex
+	var msgHandler func([]byte)
+	var pending [][]byte
+
+	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		mu.Lock()
+		h := msgHandler
+		if h == nil {
+			// The remote peer may send tunnel frames before the local
+			// application registers a handler (e.g. tunnel.Serve() not yet
+			// started). Buffer in arrival order and replay on registration.
+			pending = append(pending, msg.Data)
+			mu.Unlock()
+			return
+		}
+		mu.Unlock()
+		h(msg.Data)
+	})
+
+	return DataChannel{
+		Label: dc.Label(),
+		OnMessage: func(h func([]byte)) {
+			mu.Lock()
+			msgHandler = h
+			buffered := pending
+			pending = nil
+			mu.Unlock()
+			for _, data := range buffered {
+				h(data)
+			}
+		},
+		Send: func(data []byte) error {
+			return dc.Send(data)
+		},
+		// Observable SCTP backlog arms the transport's strict-priority
+		// egress scheduler (WebRTC-path HOL fix). pion maintains this per
+		// DataChannel; nil consumers simply keep passthrough sends.
+		BufferedAmount: dc.BufferedAmount,
+		Close: func() error {
+			return dc.Close()
+		},
+		OnClose: func(cb func()) {
+			dc.OnClose(func() { cb() })
+		},
+	}
+}
+
+// ── sendRaw helpers on signalingClient ──────────────────────────────────────
 
 func (sc *signalingClient) sendRaw(msgType MessageType, payload any) error {
 	data, err := Marshal(msgType, payload)

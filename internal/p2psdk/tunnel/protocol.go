@@ -23,6 +23,12 @@ const MaxPayloadBytes = 16384 // 16 KiB
 // DefaultSendWindowSize is the default unacknowledged send window per stream.
 const DefaultSendWindowSize = 8
 
+// MaxTargetBitrateBps caps the TunnelBitrate target (#134①): a sanity
+// ceiling against a runaway estimator (50 Mbps is far above any realistic
+// single camera stream) — the agent still clamps locally to the encoder's
+// supported range.
+const MaxTargetBitrateBps = 50_000_000
+
 // TunnelMessageType enumerates tunnel sub-protocol message types.
 //
 //nolint:revive // stutters as tunnel.TunnelMessageType; renaming would break API
@@ -43,6 +49,16 @@ const (
 	// gets no answer marks T2 absent instead of retrying.
 	TunnelMessageTypeEcho     TunnelMessageType = "echo"
 	TunnelMessageTypeEchoResp TunnelMessageType = "echo_resp"
+
+	// TunnelMessageTypeBitrate carries a congestion-control bitrate target
+	// (#134①). Sender → media source: the viewer's bandwidth estimator
+	// (GCC/TWCC wiring lives in the media stack ports — the transport SDK
+	// only owns the pipe) outputs a target bitrate, and the device agent
+	// adjusts the encoder accordingly. Session-level command (never bound to
+	// a stream lifecycle): StreamID 0 means "the session's media stream";
+	// semantics are latest-wins, so the lossy ctrl lane is fine and no ack
+	// frame exists. Old peers hit the unknown-type ignore rule (#87).
+	TunnelMessageTypeBitrate TunnelMessageType = "bitrate"
 )
 
 // TunnelMessage is the envelope for DataChannel tunnel sub-protocol messages.
@@ -87,6 +103,24 @@ type TunnelData struct {
 //nolint:revive // stutters as tunnel.TunnelClose; renaming would break API
 type TunnelClose struct {
 	StreamID uint32 `json:"stream_id"`
+}
+
+// TunnelBitrate delivers a congestion-control bitrate target (#134①).
+//
+// The viewer-side media stack runs the bandwidth estimator (research doc 11
+// §1.1 item ①: TWCC feedback + GCC — wired in the media ports, not here);
+// its output crosses the tunnel as this frame and the device agent maps
+// TargetBps onto the camera/NVR encoder. TargetBps 0 means "no estimate
+// available" and the agent should hold its current rate rather than
+// dropping to zero. StreamID may reference a specific tunnel stream; 0
+// targets the session's primary media stream. Frames are latest-wins: a
+// lost frame costs one update cycle, not data corruption, so the frame
+// rides the lossy ctrl lane and carries no ack.
+//
+//nolint:revive // stutters as tunnel.TunnelBitrate; renaming would break API
+type TunnelBitrate struct {
+	StreamID  uint32 `json:"stream_id,omitempty"`
+	TargetBps uint32 `json:"target_bps"`
 }
 
 // StreamIDGenerator produces monotonically increasing stream IDs.

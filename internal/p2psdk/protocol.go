@@ -36,6 +36,10 @@ const (
 	MessageTypePing           MessageType = "ping"
 	MessageTypePong           MessageType = "pong"
 	MessageTypeSignalResume   MessageType = "signal_resume"
+	// MessageTypeIceRefresh (#132): mid-life TURN credential renewal —
+	// client requests, server re-mints the scoped ICE list and echoes
+	// back. Old servers warn-and-drop (additive).
+	MessageTypeIceRefresh MessageType = "ice_refresh"
 
 	// Server-side presence broadcasts: informational only; the SDK accepts
 	// them so ParseAndValidate does not reject frames the server sends to
@@ -90,17 +94,24 @@ type Hello struct {
 
 // Welcome is sent by the server after a successful hello handshake.
 type Welcome struct {
-	Capabilities    map[string]any `json:"capabilities,omitempty"`
-	SessionID       string         `json:"session_id"`
-	PeerID          string         `json:"peer_id"`
-	RelayURL        string         `json:"relay_url,omitempty"`
-	RelayPubKey     string         `json:"relay_pub_key,omitempty"`
-	ProtocolVersion string         `json:"protocol_version,omitempty"`
-	ICEServers      []ICEServer    `json:"ice_servers,omitempty"`
-	MaxPeers        int            `json:"max_peers"`
-	MaxDevices      int            `json:"max_devices"`
-	ServerTime      int64          `json:"server_time"`
-	RelayEnabled    bool           `json:"relay_enabled"`
+	Capabilities map[string]any `json:"capabilities,omitempty"`
+	SessionID    string         `json:"session_id"`
+	PeerID       string         `json:"peer_id"`
+	RelayURL     string         `json:"relay_url,omitempty"`
+	RelayPubKey  string         `json:"relay_pub_key,omitempty"`
+	// ProtocolVersion echoes the server protocol level.
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	// RelayTicket (#143): base64 session ticket minted by the signaling
+	// server, bound to relay_pub_key. Decode with relay.TicketFromBase64
+	// and install via relay.Client.SetTicket before Connect; absent when
+	// the relay has no ticket secret (feature off). Its position here keeps
+	// the string block contiguous for alignment (fieldalignment).
+	RelayTicket  string      `json:"relay_ticket,omitempty"`
+	ICEServers   []ICEServer `json:"ice_servers,omitempty"`
+	MaxPeers     int         `json:"max_peers"`
+	MaxDevices   int         `json:"max_devices"`
+	ServerTime   int64       `json:"server_time"`
+	RelayEnabled bool        `json:"relay_enabled"`
 }
 
 // ICEServer describes a STUN or TURN server for ICE connectivity.
@@ -132,6 +143,11 @@ type ConnectRequest struct {
 	TargetPeerID string `json:"target_peer_id"`
 	SessionID    string `json:"session_id"`
 	ServiceName  string `json:"service_name,omitempty"`
+	// Purpose declares the session's business purpose (#136, additive JSON
+	// — old devices ignore it): "playback" puts the session under the
+	// PlaybackTunnelOnly policy on both sides (the device threads it into
+	// its own session object for symmetric enforcement). Empty = default.
+	Purpose string `json:"purpose,omitempty"`
 	// RelayURL/RelayPubKey: cross-node (federation) session relay override
 	// injected by the servers — both peers must share ONE relay endpoint.
 	RelayURL    string `json:"relay_url,omitempty"`
@@ -139,12 +155,18 @@ type ConnectRequest struct {
 	// CallerRelayPubKey is the CALLER's relay identity public key (hex),
 	// sent upfront so the device-side offerer can arm tunnel E2EE BEFORE
 	// creating the DataChannel — on the direct path the SDP exchange (the
-	// historical key carrier) arrives too late for that (mibeescout#16).
+	// historical key carrier) arrives too late for that (the relay-identity gap).
 	// Distinct from federation's relay_pub_key above, which names the
 	// shared relay SERVER key. Additive: old devices ignore it (direct
 	// path stays plaintext exactly as before); armed only when BOTH sides
 	// are new.
 	CallerRelayPubKey string `json:"caller_relay_pub_key,omitempty"`
+	// RelayTicket (#143 v2): base64 session ticket bound to RelayPubKey,
+	// minted by the node that injected this relay override. A re-pointed
+	// session without it reaches the new relay ticketless — harmless while
+	// that relay runs with the gate off, a hard reject once it enforces
+	// admission. Additive: old clients ignore the field.
+	RelayTicket string `json:"relay_ticket,omitempty"`
 	// CtrlChannel declares that THIS client understands the dual-channel
 	// direct path (#88): a new device-side offerer that sees it may open
 	// the p2p-ctrl channel (unordered, unreliable) alongside p2p-data.
@@ -159,6 +181,8 @@ type ConnectAccept struct {
 	// semantics as on ConnectRequest).
 	RelayURL    string `json:"relay_url,omitempty"`
 	RelayPubKey string `json:"relay_pub_key,omitempty"`
+	// RelayTicket (#143 v2): same semantics as on ConnectRequest.
+	RelayTicket string `json:"relay_ticket,omitempty"`
 }
 
 // ConnectReject is sent to reject a connection request.
@@ -240,6 +264,14 @@ type TelemetryReport struct {
 	BytesRecv     uint64  `json:"bytes_recv,omitempty"`
 }
 
+// IceRefresh is the mid-life TURN credential renewal (#132): the client
+// requests over its authenticated signal link; the server re-mints the
+// scoped ICE list and echoes it back.
+type IceRefresh struct {
+	SessionID  string      `json:"session_id,omitempty"`
+	ICEServers []ICEServer `json:"ice_servers,omitempty"` // server→client only
+}
+
 // PeerGone is the server's conclusive-death verdict for a peer (#63): its
 // resume window expired. Sessions riding that peer should be torn down
 // immediately — a resume attempt against it cannot succeed.
@@ -299,7 +331,7 @@ func ParseAndValidate(raw []byte) (*Message, error) {
 		MessageTypeSessionOpen, MessageTypeSessionClose,
 		MessageTypePing, MessageTypePong, MessageTypeSignalResume,
 		MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone,
-		MessageTypeTelemetry:
+		MessageTypeTelemetry, MessageTypeIceRefresh:
 		// valid
 	default:
 		return nil, fmt.Errorf("invalid message type: %s", msg.Type)

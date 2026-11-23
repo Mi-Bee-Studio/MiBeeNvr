@@ -34,10 +34,6 @@ type mockSignalServer struct {
 	// after Connect() returns but before the DataChannel can open.
 	connectAcceptDelay time.Duration
 
-	// relayWelcome, when set, rides the welcome as relay intent
-	// (RelayURL/RelayPubKey) — relay-identity tests use a dead URL so the
-	// dial fails fast while the INTENT is present (mibeescout#16 shape).
-	relayWelcome *Welcome
 	// hellos counts hello messages received (any outcome).
 	hellos          int
 	mu              sync.RWMutex
@@ -89,6 +85,9 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	var peerID string
 	switch msg.Type {
+	case MessageTypeIceRefresh:
+		// Additive type (#132): the mock does not mint credentials.
+		return
 	case MessageTypeTelemetry:
 		// Client→server quality report (research doc 07): the mock server
 		// accepts and ignores it — no peer identity to record.
@@ -121,10 +120,6 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 			MaxDevices:   10,
 			RelayEnabled: true,
 			ServerTime:   time.Now().Unix(),
-		}
-		if s.relayWelcome != nil {
-			welcome.RelayURL = s.relayWelcome.RelayURL
-			welcome.RelayPubKey = s.relayWelcome.RelayPubKey
 		}
 
 		// Register peer and session->peer mapping
@@ -205,6 +200,9 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 //nolint:funlen // test mock function
 func (s *mockSignalServer) routeMessage(sender *websocket.Conn, msg *Message) bool {
 	switch msg.Type {
+	case MessageTypeIceRefresh:
+		// Additive type (#132): swallowed — the mock never mints.
+		return true
 	case MessageTypeTelemetry:
 		// Client→server quality report (research doc 07): swallow — never
 		// routed between mock peers.

@@ -35,7 +35,7 @@ func TestWssRelayEndpointProbe(t *testing.T) {
 	// ② 直连信令拿 welcome（ws 明文路径即可——只取 RelayPubKey）。
 	//    复用生产信令的公网入口（wss://…/signal）。
 	sc := newSignalingClient(SignalingConfig{
-		ServerURL: "wss://signal.example.invalid/signal",
+		ServerURL: "wss://ali-gz-server.mlsbs.top/signal",
 		JWT:       jwt,
 		ProductID: "mibeenvr",
 		PeerID:    "probe-wss-relay",
@@ -51,7 +51,7 @@ func TestWssRelayEndpointProbe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	require.NoError(t, rc.Connect(ctx,
-		"wss://signal.example.invalid/relay", welcome.RelayPubKey),
+		"wss://ali-gz-server.mlsbs.top/relay", welcome.RelayPubKey),
 		"wss/443 反代路径应能承载 relay client_auth 握手")
 	defer rc.Close()
 
@@ -69,7 +69,7 @@ func mintProbeJWT(t *testing.T, pw string) string {
 		"client_id":  {"p2p-signaling"},
 	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).PostForm(
-		"https://signal.example.invalid/oidc/token", form)
+		"https://ali-gz-server.mlsbs.top/oidc/token", form)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	var body struct {

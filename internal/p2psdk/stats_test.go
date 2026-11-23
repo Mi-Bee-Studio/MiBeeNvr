@@ -123,3 +123,46 @@ func TestStatsCollector_OnStatsCallback(t *testing.T) {
 		t.Fatal("timeout waiting for OnStats callback")
 	}
 }
+
+func TestSnapshotFromReport_ObservabilityFields(t *testing.T) {
+	local := webrtc.ICECandidateStats{
+		ID: "lc", Type: webrtc.StatsTypeLocalCandidate,
+		CandidateType: webrtc.ICECandidateTypeHost, IP: "192.168.1.2", Port: 40000,
+		Protocol: "udp", Priority: 100,
+	}
+	remote := webrtc.ICECandidateStats{
+		ID: "rc", Type: webrtc.StatsTypeRemoteCandidate,
+		CandidateType: webrtc.ICECandidateTypeSrflx, IP: "8.8.8.8", Port: 50000,
+		Protocol: "udp", Priority: 50,
+	}
+	pair := webrtc.ICECandidatePairStats{
+		ID: "pair", Nominated: true, LocalCandidateID: "lc", RemoteCandidateID: "rc",
+		CurrentRoundTripTime: 0.02, TotalRoundTripTime: 1.5,
+		AvailableOutgoingBitrate: 1_000_000, AvailableIncomingBitrate: 2_000_000,
+		RetransmissionsSent: 3, RetransmissionsReceived: 1,
+	}
+	sctp := webrtc.SCTPTransportStats{
+		SmoothedRoundTripTime: 0.03, CongestionWindow: 1024, ReceiverWindow: 2048, MTU: 1200,
+	}
+	snap := snapshotFromReport(webrtc.StatsReport{
+		"lc": local, "rc": remote, "pair": pair, "sctp": sctp,
+	})
+	if snap.SCTPCongestionWindow != 1024 || snap.SCTPReceiverWindow != 2048 || snap.SCTPMTU != 1200 {
+		t.Fatalf("SCTP stats missing: %+v", snap)
+	}
+	if snap.SCTPSmoothedRTTSeconds != 0.03 || snap.ICERetransmissionsSent != 3 || snap.ICETotalRoundTripTime != 1.5 {
+		t.Fatalf("pair/sctp scalars missing: %+v", snap)
+	}
+	if len(snap.Candidates) != 2 {
+		t.Fatalf("want 2 candidates, got %d", len(snap.Candidates))
+	}
+	var remoteOK bool
+	for _, c := range snap.Candidates {
+		if c.IsRemote && c.CandidateType == "srflx" && c.IP == "8.8.8.8" && c.Port == 50000 {
+			remoteOK = true
+		}
+	}
+	if !remoteOK {
+		t.Fatalf("remote candidate not captured: %+v", snap.Candidates)
+	}
+}

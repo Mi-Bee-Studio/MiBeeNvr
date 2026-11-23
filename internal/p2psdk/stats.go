@@ -27,6 +27,11 @@ func ipVersionOf(addr string) string {
 
 // StatsSnapshot contains ICE and DataChannel statistics extracted from a
 // single GetStats() call.
+//
+// Field order is the fieldalignment optimum — the 2026-11-18 observability
+// additions (SCTP*/retransmissions/round-trip/bitrates/Candidates) are
+// scattered by it; every field carries its own comment, so don't hand-tune
+// the sequence back into grouped blocks.
 type StatsSnapshot struct {
 	// SessionID identifies the P2P session this snapshot belongs to (set by
 	// the SDK before OnStats delivery; empty in hand-constructed snapshots).
@@ -60,20 +65,72 @@ type StatsSnapshot struct {
 	// ICEServer tag to attribute the selected path to a provider (research
 	// doc 07 §5.1).
 	ICELocalCandidateURL string
-	// ICERTTSeconds is the current round-trip time of the nominated ICE
-	// candidate pair, in seconds. Zero when no nominated pair exists yet.
-	ICERTTSeconds float64
-	// ICEAvailableBitrateBits is the available outgoing bitrate for the
-	// nominated ICE candidate pair, in bits per second. Zero when unknown.
-	ICEAvailableBitrateBits float64
+	// Candidates is the full local+remote ICE candidate inventory from this
+	// GetStats() snapshot (not just the nominated pair). It answers "were
+	// there direct candidates that lost arbitration?" — critical for tuning
+	// hole-punching vs path-selection. Empty when GetStats has none.
+	Candidates []ICECandidateStat
+
 	// DataChannelBytesSent is the total bytes sent over all DataChannels.
 	DataChannelBytesSent uint64
+	// ICERetransmissionsReceived is an extra nominated-pair counter from
+	// webrtc.ICECandidatePairStats. Retransmissions* are reported by pion
+	// but are often zero in practice (the underlying ice/v4 does not
+	// populate them); treat as best-effort.
+	ICERetransmissionsReceived uint64
 	// DataChannelBytesReceived is the total bytes received over all DataChannels.
 	DataChannelBytesReceived uint64
 	// DataChannelMessagesSent is the total messages sent over all DataChannels.
 	DataChannelMessagesSent uint64
 	// DataChannelMessagesReceived is the total messages received over all DataChannels.
 	DataChannelMessagesReceived uint64
+
+	// --- P2P observability additions (additive, 2026-11-18) ---
+
+	// SCTPSmoothedRTTSeconds: transport health from pion SCTPTransportStats.
+	// These expose the SCTP congestion window / receiver window / smoothed
+	// RTT, which are the key signals for distinguishing link loss from SCTP
+	// head-of-line blocking. Zero when the transport stats are unavailable.
+	// NOTE: pion does NOT expose an SCTP retransmission counter via GetStats
+	// (its internal nRtos is log-only), so no such field exists here by design.
+	SCTPSmoothedRTTSeconds float64
+	// ICERTTSeconds is the current round-trip time of the nominated ICE
+	// candidate pair, in seconds. Zero when no nominated pair exists yet.
+	ICERTTSeconds float64
+	// ICEAvailableIncomingBitrateBits: extra nominated-pair counter
+	// (best-effort — see ICERetransmissionsReceived).
+	ICEAvailableIncomingBitrateBits float64
+	// ICETotalRoundTripTime: extra nominated-pair counter (best-effort —
+	// see ICERetransmissionsReceived).
+	ICETotalRoundTripTime float64
+	// ICERetransmissionsSent: extra nominated-pair counter (best-effort —
+	// see ICERetransmissionsReceived).
+	ICERetransmissionsSent uint64
+	// ICEAvailableBitrateBits is the available outgoing bitrate for the
+	// nominated ICE candidate pair, in bits per second. Zero when unknown.
+	ICEAvailableBitrateBits float64
+	// SCTPMTU / SCTPReceiverWindow / SCTPCongestionWindow: transport health
+	// counters — see SCTPSmoothedRTTSeconds (split by the fieldalignment
+	// field order).
+	SCTPMTU              uint32
+	SCTPReceiverWindow   uint32
+	SCTPCongestionWindow uint32
+}
+
+// ICECandidateStat is one candidate from a GetStats snapshot, reduced to the
+// fields useful for path analysis. Deleted=true means the candidate has been
+// removed from the ICE agent (e.g. after a restart).
+type ICECandidateStat struct {
+	ID            string
+	CandidateType string // host | srflx | prflx | relay
+	IP            string
+	Protocol      string // udp | tcp
+	URL           string // STUN/TURN server that produced it (empty for host)
+	RelayProtocol string
+	Port          int32
+	Priority      int32
+	Deleted       bool
+	IsRemote      bool
 }
 
 // StatsCollector periodically calls pc.GetStats() and reports extracted
@@ -180,11 +237,19 @@ func snapshotFromReport(report webrtc.StatsReport) StatsSnapshot {
 	var snap StatsSnapshot
 
 	// First pass: index candidates by ID so the nominated pair's
-	// Local/RemoteCandidateID can be resolved to candidate details.
+	// Local/RemoteCandidateID can be resolved to candidate details. Also keep
+	// the full inventory (both sides) for path-analysis consumers.
 	candidates := make(map[string]webrtc.ICECandidateStats, len(report))
 	for _, stat := range report {
 		if cs, ok := stat.(webrtc.ICECandidateStats); ok {
 			candidates[cs.ID] = cs
+			snap.Candidates = append(snap.Candidates, ICECandidateStat{
+				ID: cs.ID, CandidateType: cs.CandidateType.String(),
+				IP: cs.IP, Port: cs.Port, Protocol: cs.Protocol,
+				URL: cs.URL, RelayProtocol: cs.RelayProtocol,
+				Priority: cs.Priority, Deleted: cs.Deleted,
+				IsRemote: cs.Type == webrtc.StatsTypeRemoteCandidate,
+			})
 		}
 	}
 
@@ -194,6 +259,10 @@ func snapshotFromReport(report webrtc.StatsReport) StatsSnapshot {
 			if s.Nominated {
 				snap.ICERTTSeconds = s.CurrentRoundTripTime
 				snap.ICEAvailableBitrateBits = s.AvailableOutgoingBitrate
+				snap.ICETotalRoundTripTime = s.TotalRoundTripTime
+				snap.ICEAvailableIncomingBitrateBits = s.AvailableIncomingBitrate
+				snap.ICERetransmissionsSent = s.RetransmissionsSent
+				snap.ICERetransmissionsReceived = s.RetransmissionsReceived
 				if lc, ok := candidates[s.LocalCandidateID]; ok {
 					snap.ICELocalCandidateType = lc.CandidateType.String()
 					snap.ICELocalCandidateAddress = lc.IP
@@ -206,6 +275,12 @@ func snapshotFromReport(report webrtc.StatsReport) StatsSnapshot {
 				}
 				snap.ICEIPVersion = ipVersionOf(snap.ICELocalCandidateAddress)
 			}
+
+		case webrtc.SCTPTransportStats:
+			snap.SCTPSmoothedRTTSeconds = s.SmoothedRoundTripTime
+			snap.SCTPCongestionWindow = s.CongestionWindow
+			snap.SCTPReceiverWindow = s.ReceiverWindow
+			snap.SCTPMTU = s.MTU
 
 		case webrtc.DataChannelStats:
 			snap.DataChannelBytesSent += s.BytesSent

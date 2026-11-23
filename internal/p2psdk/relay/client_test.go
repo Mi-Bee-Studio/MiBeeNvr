@@ -554,3 +554,17 @@ func TestAuthenticate_VerifiesServerAuthProof(t *testing.T) {
 		t.Fatal("tampered proof must be rejected")
 	}
 }
+
+// TestSendToRejectsZeroDst (#152 模式①回归): 未绑定/已清场的 session 以
+// 零值 peer 调 SendTo 曾原样出帧（dst 前缀全零=服务端 dst-not-found 静默
+// 丢弃）——现在在 SDK 边界直接拒绝。
+func TestSendToRejectsZeroDst(t *testing.T) {
+	c := &Client{}
+	err := c.SendTo([32]byte{}, []byte("x"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "zero destination")
+
+	err = c.SendPriorityTo([32]byte{}, []byte("x"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "zero destination")
+}
