@@ -21,6 +21,12 @@ const (
 	relayBreakerThreshold = 3
 	// relayCooldown 是熔断打开后的冷却时长（#23 建议值 5min）。
 	relayCooldown = 5 * time.Minute
+	// relayFlapWindow 是一次「成功」必须活过的时长，才被认作健康而非
+	// flap。取值依据：正常信令会话动辄数分钟以上，而事故里的连接只活了
+	// 5 秒一轮；60s 足以把「刚建好就被踢」与「真连上了」分开。
+	relayFlapWindow = 60 * time.Second
+	// relayFlapReason 是 flap 事件的归类标签（区别于建连失败的原因）。
+	relayFlapReason = "flap"
 )
 
 // relay 熔断状态（状态面字符串；指标 gauge 用 [relayCircuitNumeric]）。
@@ -72,9 +78,13 @@ type relayBreaker struct {
 	mu         sync.Mutex
 	now        func() time.Time
 	state      string
-	fails      int // 连续失败（成功清零）
+	fails      int // 连续失败（含 flap；稳定后才清零）
 	openUntil  time.Time
 	lastReason string
+	// lastSuccess 是上一次「建连成功」的时刻（零值 = 尚无）。两次成功
+	// 相隔短于 relayFlapWindow 说明上一次连接刚建好就又断了——这是
+	// flap，不是健康，不能清零连击（见 record）。
+	lastSuccess time.Time
 
 	dials    uint64
 	failures uint64
@@ -108,11 +118,33 @@ func (b *relayBreaker) allowDial() bool {
 // record 消费一次建连结果（OnRelayConnect 的输入）。成功回 closed 并
 // 清连击；失败计数归类，连击达阈值（或半开探测失败）即 open 一轮新
 // 冷却。返回是否刚转入 open（供调用方记一次迁移日志）。
+//
+// flap 感知：一次「成功」只有在它活过了 relayFlapWindow 之后才算健康。
+// 如果距上一次成功不足该窗口，说明上一个连接刚建好就又掉了——按失败
+// 计一次而不是清零。此前只看建连结果，导致「连上→被踢→重连成功→被踢」
+// 这类循环每轮都把失败计数清零，永远到不了阈值（生产 2026-11-23：
+// relay 热循环 3000+ 轮，而 failures_total 只记了 18）。
 func (b *relayBreaker) record(err error) (opened bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.dials++
+	now := b.now()
 	if err == nil {
+		// 上次成功距今不足 flap 窗口 = 上个连接是短命的。
+		flapping := !b.lastSuccess.IsZero() && now.Sub(b.lastSuccess) < relayFlapWindow
+		b.lastSuccess = now
+		if flapping {
+			// 记为一次 flap 失败：连接确实起来了，但没站住。
+			b.fails++
+			b.lastReason = relayFlapReason
+			b.byReason[relayFlapReason]++
+			if b.fails >= relayBreakerThreshold || b.state == relayCircuitHalfOpen {
+				opened = b.state != relayCircuitOpen
+				b.state = relayCircuitOpen
+				b.openUntil = now.Add(relayCooldown)
+			}
+			return opened
+		}
 		b.state = relayCircuitClosed
 		b.fails = 0
 		return false
@@ -124,7 +156,7 @@ func (b *relayBreaker) record(err error) (opened bool) {
 	if b.fails >= relayBreakerThreshold || b.state == relayCircuitHalfOpen {
 		opened = b.state != relayCircuitOpen
 		b.state = relayCircuitOpen
-		b.openUntil = b.now().Add(relayCooldown)
+		b.openUntil = now.Add(relayCooldown)
 	}
 	return opened
 }

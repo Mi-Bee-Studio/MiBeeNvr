@@ -22,7 +22,7 @@ func TestIsIdentityPlaneMovedBody(t *testing.T) {
 		body string
 		want bool
 	}{
-		{"new contract", `{"error":"identity_plane_moved: this endpoint is served by mibee-biz"}`, true},
+		{"new contract", `{"error":"identity_plane_moved: this endpoint is served by the identity plane"}`, true},
 		{"legacy worker", `{"error":"worker_node_no_identity_plane"}`, true},
 		{"unrelated", `{"error":"invalid_grant"}`, false},
 		{"empty", ``, false},
@@ -68,10 +68,14 @@ func TestGrantDetectsIdentityPlaneMoved(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"503 new contract", http.StatusServiceUnavailable,
-			`{"error":"identity_plane_moved: this endpoint is served by mibee-biz"}`},
-		{"503 legacy worker", http.StatusServiceUnavailable,
-			`{"error":"worker_node_no_identity_plane"}`},
+		{
+			"503 new contract", http.StatusServiceUnavailable,
+			`{"error":"identity_plane_moved: this endpoint is served by the identity plane"}`,
+		},
+		{
+			"503 legacy worker", http.StatusServiceUnavailable,
+			`{"error":"worker_node_no_identity_plane"}`,
+		},
 		{"404 node banner", http.StatusNotFound, "MiBee P2P node (bj-temp)"},
 	}
 	for _, tc := range cases {
