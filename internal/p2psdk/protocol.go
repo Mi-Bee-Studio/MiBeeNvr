@@ -40,6 +40,14 @@ const (
 	// client requests, server re-mints the scoped ICE list and echoes
 	// back. Old servers warn-and-drop (additive).
 	MessageTypeIceRefresh MessageType = "ice_refresh"
+	// MessageTypeRelayTicketRequest (#143): the client asks for a fresh
+	// relay session ticket before rebuilding its relay connection — the
+	// welcome ticket admits only the original data+ctrl legs and expires
+	// 15 minutes after the welcome. Old servers warn-and-drop and the dial
+	// goes ahead without a ticket (the legacy path while the gate is off).
+	MessageTypeRelayTicketRequest MessageType = "relay_ticket_request"
+	// MessageTypeRelayTicket is the answer (RelayTicket empty = none granted).
+	MessageTypeRelayTicket MessageType = "relay_ticket"
 
 	// Server-side presence broadcasts: informational only; the SDK accepts
 	// them so ParseAndValidate does not reject frames the server sends to
@@ -155,7 +163,7 @@ type ConnectRequest struct {
 	// CallerRelayPubKey is the CALLER's relay identity public key (hex),
 	// sent upfront so the device-side offerer can arm tunnel E2EE BEFORE
 	// creating the DataChannel — on the direct path the SDP exchange (the
-	// historical key carrier) arrives too late for that (the relay-identity gap).
+	// historical key carrier) arrives too late for that.
 	// Distinct from federation's relay_pub_key above, which names the
 	// shared relay SERVER key. Additive: old devices ignore it (direct
 	// path stays plaintext exactly as before); armed only when BOTH sides
@@ -272,6 +280,23 @@ type IceRefresh struct {
 	ICEServers []ICEServer `json:"ice_servers,omitempty"` // server→client only
 }
 
+// RelayTicketRequest asks the server for a fresh relay session ticket (#143)
+// for the relay the client is about to dial.
+type RelayTicketRequest struct {
+	RelayURL    string `json:"relay_url,omitempty"`
+	RelayPubKey string `json:"relay_pub_key,omitempty"`
+}
+
+// RelayTicket is the server's answer: RelayTicket is the base64 ticket
+// bound to RelayPubKey, empty when none was granted (feature off, or a
+// relay that is not the one this connection was welcomed with). Decode
+// with relay.TicketFromBase64 and install via relay.Client.SetTicket.
+type RelayTicket struct {
+	RelayURL    string `json:"relay_url,omitempty"`
+	RelayPubKey string `json:"relay_pub_key,omitempty"`
+	RelayTicket string `json:"relay_ticket,omitempty"`
+}
+
 // PeerGone is the server's conclusive-death verdict for a peer (#63): its
 // resume window expired. Sessions riding that peer should be torn down
 // immediately — a resume attempt against it cannot succeed.
@@ -331,7 +356,8 @@ func ParseAndValidate(raw []byte) (*Message, error) {
 		MessageTypeSessionOpen, MessageTypeSessionClose,
 		MessageTypePing, MessageTypePong, MessageTypeSignalResume,
 		MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone,
-		MessageTypeTelemetry, MessageTypeIceRefresh:
+		MessageTypeTelemetry, MessageTypeIceRefresh,
+		MessageTypeRelayTicketRequest, MessageTypeRelayTicket:
 		// valid
 	default:
 		return nil, fmt.Errorf("invalid message type: %s", msg.Type)

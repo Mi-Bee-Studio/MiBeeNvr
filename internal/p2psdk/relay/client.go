@@ -515,8 +515,6 @@ func (c *Client) RemovePacketRoute(src [32]byte) {
 	delete(c.routes, src)
 }
 
-// Connect dials the relay WebSocket and authenticates with NaCl box.
-// serverURL must be ws:// or wss://. serverPubKeyHex is the hex-encoded
 // SetTLSConfig overrides the TLS configuration used for the data and control
 // dials. Required under DNS plan A when dialing a bare IP while presenting the
 // region domain as SNI. Must be called before Connect.
@@ -526,6 +524,8 @@ func (c *Client) SetTLSConfig(cfg *tls.Config) {
 	c.tlsConfig = cfg
 }
 
+// Connect dials the relay WebSocket and authenticates with NaCl box.
+// serverURL must be ws:// or wss://. serverPubKeyHex is the hex-encoded
 // X25519 public key of the relay server (from Welcome.RelayPubKey).
 func (c *Client) Connect(ctx context.Context, serverURL string, serverPubKeyHex string) error {
 	keyBytes, err := hex.DecodeString(serverPubKeyHex)
@@ -604,6 +604,15 @@ func (c *Client) ticketSnapshot() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ticket
+}
+
+// TicketForTest returns a copy of the installed session ticket. Test-only
+// surface (#143): production code never needs to read the ticket back — it
+// is presentation material consumed by the dial.
+func (c *Client) TicketForTest() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.ticket...)
 }
 
 // appendAuthSuffix appends the #143 client_auth suffix: the conn_type byte
