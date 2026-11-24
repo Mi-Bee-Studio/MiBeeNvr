@@ -13,10 +13,15 @@ import (
 
 // mockSignalServer implements an in-process protocol v1 signaling server for tests.
 type mockSignalServer struct {
+	// server/peers/sessions/sessionToPeer/pings/url lead: pointer-bearing
+	// fields first (fieldalignment).
 	server        *httptest.Server
 	peers         map[string]*websocket.Conn
 	sessions      map[string]*mockSession
 	sessionToPeer map[string]string // Welcome.SessionID -> PeerID for resume
+	// pings counts app-level pings received per peer (keepalive tests).
+	pings map[string]int
+	url   string
 	// pendingReject, when set, makes the mock respond to the next
 	// connect_request with a connect_reject instead of forwarding it.
 	pendingReject *ConnectReject
@@ -25,15 +30,16 @@ type mockSignalServer struct {
 	// "authentication_failed" close text) instead of a welcome. Used by the
 	// ladder-token tests.
 	helloGate func(jwt string) bool
-	// pings counts app-level pings received per peer (keepalive tests).
-	pings    map[string]int
-	upgrader websocket.Upgrader
-	url      string
+	// relayTicketHandler, when set, serves relay_ticket_request frames
+	// (#143): it returns the base64 ticket to grant ("" = none). Nil keeps
+	// the historical behaviour — the request is swallowed, as a pre-#143
+	// server would drop the unknown type.
+	relayTicketHandler func(conn *websocket.Conn, req RelayTicketRequest) string
+	upgrader           websocket.Upgrader
 	// connectAcceptDelay, when > 0, holds the delivery of connect_accept to
 	// the initiator — used by callback-timing tests to assign OnDataChannel
 	// after Connect() returns but before the DataChannel can open.
 	connectAcceptDelay time.Duration
-
 	// hellos counts hello messages received (any outcome).
 	hellos          int
 	mu              sync.RWMutex
@@ -85,8 +91,9 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	var peerID string
 	switch msg.Type {
-	case MessageTypeIceRefresh:
-		// Additive type (#132): the mock does not mint credentials.
+	case MessageTypeIceRefresh, MessageTypeRelayTicketRequest, MessageTypeRelayTicket:
+		// Additive types (#132 / #143): a client-first frame of these means
+		// nothing before the handshake — the mock does not mint credentials.
 		return
 	case MessageTypeTelemetry:
 		// Client→server quality report (research doc 07): the mock server
@@ -203,6 +210,24 @@ func (s *mockSignalServer) routeMessage(sender *websocket.Conn, msg *Message) bo
 	case MessageTypeIceRefresh:
 		// Additive type (#132): swallowed — the mock never mints.
 		return true
+	case MessageTypeRelayTicketRequest:
+		// Additive type (#143): answer only when a handler is installed.
+		var req RelayTicketRequest
+		if err := UnmarshalPayload(msg, &req); err != nil {
+			return true
+		}
+		s.mu.RLock()
+		h := s.relayTicketHandler
+		s.mu.RUnlock()
+		if h == nil {
+			return true
+		}
+		grant := RelayTicket{RelayURL: req.RelayURL, RelayPubKey: req.RelayPubKey, RelayTicket: h(sender, req)}
+		reply, _ := Marshal(MessageTypeRelayTicket, grant)
+		s.writeMu.Lock()
+		_ = sender.WriteMessage(websocket.TextMessage, reply)
+		s.writeMu.Unlock()
+		return true
 	case MessageTypeTelemetry:
 		// Client→server quality report (research doc 07): swallow — never
 		// routed between mock peers.
@@ -290,7 +315,8 @@ func (s *mockSignalServer) routeMessage(sender *websocket.Conn, msg *Message) bo
 		s.mu.Unlock()
 		return true
 	case MessageTypeHello, MessageTypeWelcome, MessageTypeError, MessageTypeSignalResume,
-		MessageTypePong, MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone:
+		MessageTypePong, MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone,
+		MessageTypeRelayTicket:
 		// Already handled during initial handshake or not expected; continue.
 		return true
 	}

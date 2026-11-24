@@ -54,6 +54,11 @@ func (s *Session) handleMessage(raw []byte) {
 		s.handlePeerGone(msg)
 	case MessageTypeIceRefresh:
 		s.handleIceRefresh(msg)
+	case MessageTypeRelayTicket:
+		s.handleRelayTicket(msg)
+	case MessageTypeRelayTicketRequest:
+		// Client→server request; unexpected from the server side.
+		s.logger.Debug("unexpected relay_ticket_request message")
 	case MessageTypeTelemetry:
 		// Client→server report; unexpected from the server side.
 		s.logger.Debug("unexpected telemetry message")

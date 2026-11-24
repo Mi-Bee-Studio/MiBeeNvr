@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -171,38 +172,52 @@ func (sc *signalingClient) maybeReconnectAfterReadError(err error, lifetime time
 	sc.reconnectWithBackoff()
 }
 
-//nolint:funlen // complex setup
+// dialTarget is the resolved signaling endpoint for one connect attempt.
+type dialTarget struct {
+	url        string
+	tlsConfig  *tls.Config
+	serverName string
+}
+
+// resolveDialTarget applies nearest-node discovery (#48) to the configured
+// endpoint, DNS plan A included: when the platform publishes a signal_ip the
+// client dials that address and presents the region domain as TLS SNI, so a
+// node needs no per-node DNS record and still gets a valid certificate.
+// Discovery is a PREFERRED endpoint only — every failure path keeps ServerURL
+// with the caller's own TLS config (the #48 backward-compatibility rule).
+func (sc *signalingClient) resolveDialTarget(ctx context.Context) dialTarget {
+	fallback := dialTarget{url: sc.cfg.ServerURL, tlsConfig: sc.cfg.TLSConfig}
+	if sc.cfg.NodesURL == "" {
+		return fallback
+	}
+	ep := DiscoverBestEndpoint(ctx, sc.cfg.NodesURL, sc.logger)
+	if ep.URL == "" {
+		return fallback
+	}
+	target := dialTarget{url: ep.URL, tlsConfig: sc.cfg.TLSConfig, serverName: ep.ServerName}
+	tlsCfg, tlsErr := withServerName(sc.cfg.TLSConfig, ep.ServerName)
+	if tlsErr != nil {
+		// The advertised URL stays usable (its host resolves to the region
+		// domain); only the split dial is off the table.
+		sc.logger.WarnContext(ctx, "node discovery: SNI override rejected, using advertised URL",
+			serverNameKey, ep.ServerName, errKey, tlsErr)
+		return target
+	}
+	target.tlsConfig = tlsCfg
+	if ep.DialURL != "" && ep.DialURL != ep.URL {
+		target.url = ep.DialURL
+	}
+	return target
+}
+
 func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
+	target := sc.resolveDialTarget(ctx)
 	dialer := &websocket.Dialer{
-		TLSClientConfig:  sc.cfg.TLSConfig,
+		TLSClientConfig:  target.tlsConfig,
 		HandshakeTimeout: sc.cfg.handshakeTimeout(),
 	}
 
-	serverURL := sc.cfg.ServerURL
-	// #48 nearest-node selection: only when discovery is configured, and
-	// only as a PREFERRED endpoint — every failure path keeps ServerURL.
-	//
-	// DNS plan A: when the platform publishes a signal_ip we dial that address
-	// directly and present the region domain as TLS SNI, so a node needs no
-	// per-node DNS record and still gets a valid certificate.
-	if sc.cfg.NodesURL != "" {
-		if ep := DiscoverBestEndpoint(ctx, sc.cfg.NodesURL, sc.logger); ep.URL != "" {
-			serverURL = ep.URL
-			if ep.DialURL != "" && ep.DialURL != ep.URL {
-				if tlsCfg, tlsErr := withServerName(sc.cfg.TLSConfig, ep.ServerName); tlsErr == nil {
-					dialer.TLSClientConfig = tlsCfg
-					serverURL = ep.DialURL
-				} else {
-					sc.logger.WarnContext(ctx, "node discovery: SNI override rejected, using advertised URL",
-						serverNameKey, ep.ServerName, errKey, tlsErr)
-				}
-			} else if tlsCfg, tlsErr := withServerName(sc.cfg.TLSConfig, ep.ServerName); tlsErr == nil {
-				dialer.TLSClientConfig = tlsCfg
-			}
-		}
-	}
-
-	conn, resp, err := dialer.DialContext(ctx, serverURL, http.Header{})
+	conn, resp, err := dialer.DialContext(ctx, target.url, http.Header{})
 	if err != nil {
 		// The discovered node may be freshly dead (probe raced): one
 		// straight retry on the configured URL before giving the rung up.
@@ -250,6 +265,7 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
 		_ = conn.Close()
+		sc.noteNodeDrainingClose(err)
 		if cls := classifyCloseError(err); cls != authCloseNone {
 			sc.noteAuthClassClose(cls)
 			return nil, fmt.Errorf("%w: server rejected hello: %w", ErrAuthFailed, err)
@@ -299,6 +315,21 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 // after onMessage/onClose are set.
 func (sc *signalingClient) start() {
 	go sc.recvLoop()
+}
+
+// noteNodeDrainingClose reacts to a node_draining handshake close (#163): the
+// platform pulled this node from discovery (draining or expired), so the
+// cached discovery answer is stale for up to nodeDiscoveryTTL. Drop it — the
+// next rung re-discovers and lands on a node that still admits peers, instead
+// of hammering one that just said "try elsewhere". Not an auth-class close:
+// the credential was never looked at (the gate sits before JWT verification
+// on purpose — a drain must not burn a single-use token).
+func (sc *signalingClient) noteNodeDrainingClose(err error) {
+	if !IsNodeDrainingClose(err) {
+		return
+	}
+	invalidateEndpointCache(sc.cfg.NodesURL)
+	sc.logger.Warn("signaling node is draining — discovery cache dropped", reasonKey, closeReasonNodeDraining)
 }
 
 // sendBytes writes raw bytes to the WebSocket connection.

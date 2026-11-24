@@ -401,36 +401,41 @@ type endpointResult struct {
 	ep      Endpoint
 }
 
-// DiscoverBestEndpoint is DiscoverBestNode plus the DNS plan-A connection
-// details. Callers that need a TLS SNI distinct from the dialed IP (Go/Rust
-// with a published signal_ip) use this; DiscoverBestNode stays for callers
-// that only need a URL.
-//
-// Zero Endpoint (URL == "") means "no candidate beat the fallback".
-func DiscoverBestEndpoint(ctx context.Context, nodesURL string, logger *slog.Logger) Endpoint {
-	if logger == nil {
-		logger = slog.Default()
-	}
+// cachedEndpoint returns the still-fresh cached answer for nodesURL, if any.
+func cachedEndpoint(nodesURL string) (Endpoint, bool) {
 	if cached, ok := endpointCache.Load(nodesURL); ok {
 		if r, isOK := cached.(endpointResult); isOK &&
 			time.Since(r.fetched) < nodeDiscoveryTTL && r.ep.URL != "" {
-			return r.ep
+			return r.ep, true
 		}
 	}
+	return Endpoint{}, false
+}
 
-	nodes, err := fetchNodeList(ctx, nodesURL)
-	if err != nil {
-		logger.WarnContext(ctx, "node discovery fetch failed — using configured URL", errKey, err)
-		return Endpoint{}
+// invalidateEndpointCache drops the cached discovery answer for nodesURL
+// (#163 node lifecycle): called when a node answered a handshake with
+// node_draining — the platform pulled it after this answer was cached, and
+// the cache would keep steering every rung at it for up to nodeDiscoveryTTL.
+func invalidateEndpointCache(nodesURL string) {
+	if nodesURL == "" {
+		return
 	}
+	endpointCache.Delete(nodesURL)
+}
 
-	// Build probe candidates: prefer the direct-IP URL so the probe measures
-	// the path the client will actually use.
-	type cand struct {
-		node PublicNode
-		url  string
-	}
-	cands := make([]cand, 0, len(nodes))
+// endpointCand is one node-list entry prepared for probing: the node plus the
+// URL the probe measures. Field order is the fieldalignment optimum (the
+// string leads).
+type endpointCand struct {
+	url  string
+	node PublicNode
+}
+
+// endpointCandidates filters the node list down to online nodes with a signal
+// URL and derives each one's probe target. Under plan A that is the direct-IP
+// dial target, so the probe measures the path the client will actually use.
+func endpointCandidates(nodes []PublicNode) ([]endpointCand, []string) {
+	cands := make([]endpointCand, 0, len(nodes))
 	probeURLs := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		if !n.Online || !strings.Contains(n.SignalURL, "://") {
@@ -441,15 +446,15 @@ func DiscoverBestEndpoint(ctx context.Context, nodesURL string, logger *slog.Log
 		if changed {
 			probeTarget = dialURL
 		}
-		cands = append(cands, cand{node: n, url: probeTarget})
+		cands = append(cands, endpointCand{url: probeTarget, node: n})
 		probeURLs = append(probeURLs, probeTarget)
 	}
-	if len(cands) == 0 {
-		return Endpoint{}
-	}
+	return cands, probeURLs
+}
 
-	rtts := probeAll(ctx, probeURLs)
-	var alive []Endpoint
+// aliveEndpoints keeps the candidates whose probe answered, as dials.
+func aliveEndpoints(cands []endpointCand, rtts map[string]time.Duration) []Endpoint {
+	alive := make([]Endpoint, 0, len(cands))
 	for _, c := range cands {
 		rtt, ok := rtts[c.url]
 		if !ok {
@@ -463,25 +468,60 @@ func DiscoverBestEndpoint(ctx context.Context, nodesURL string, logger *slog.Log
 			RTT:        rtt,
 		})
 	}
-	if len(alive) == 0 {
-		logger.WarnContext(ctx, "node discovery: every candidate probe failed — using configured URL")
-		return Endpoint{}
-	}
+	return alive
+}
 
-	// Same bucketing policy as DiscoverBestNode.
+// rankEndpoints orders alive endpoints best-first: 50 ms latency buckets
+// (floor), shuffled inside each bucket (anti-thundering-herd) — the same
+// policy as DiscoverBestNode.
+func rankEndpoints(alive []Endpoint) []Endpoint {
 	buckets := make(map[int64][]Endpoint)
 	for _, e := range alive {
 		b := int64(e.RTT/time.Millisecond) / bucketWidthMs
 		buckets[b] = append(buckets[b], e)
 	}
-	var ordered []Endpoint
+	ordered := make([]Endpoint, 0, len(alive))
 	for b := int64(0); b <= maxBucketEndpoints(buckets); b++ {
 		group := buckets[b]
 		//nolint:gosec // bucket shuffle anti-herd, not crypto
 		rand.Shuffle(len(group), func(i, j int) { group[i], group[j] = group[j], group[i] })
 		ordered = append(ordered, group...)
 	}
-	best := ordered[0]
+	return ordered
+}
+
+// DiscoverBestEndpoint is DiscoverBestNode plus the DNS plan-A connection
+// details. Callers that need a TLS SNI distinct from the dialed IP (Go/Rust
+// with a published signal_ip) use this; DiscoverBestNode stays for callers
+// that only need a URL.
+//
+// Zero Endpoint (URL == "") means "no candidate beat the fallback".
+func DiscoverBestEndpoint(ctx context.Context, nodesURL string, logger *slog.Logger) Endpoint {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if cached, ok := cachedEndpoint(nodesURL); ok {
+		return cached
+	}
+
+	nodes, err := fetchNodeList(ctx, nodesURL)
+	if err != nil {
+		logger.WarnContext(ctx, "node discovery fetch failed — using configured URL", errKey, err)
+		return Endpoint{}
+	}
+
+	cands, probeURLs := endpointCandidates(nodes)
+	if len(cands) == 0 {
+		return Endpoint{}
+	}
+
+	alive := aliveEndpoints(cands, probeAll(ctx, probeURLs))
+	if len(alive) == 0 {
+		logger.WarnContext(ctx, "node discovery: every candidate probe failed — using configured URL")
+		return Endpoint{}
+	}
+
+	best := rankEndpoints(alive)[0]
 	logger.InfoContext(ctx, "node discovery selected endpoint",
 		urlKey, best.URL, rttMsKey, best.RTT.Milliseconds(),
 		serverNameKey, best.ServerName, candidatesKey, len(alive))

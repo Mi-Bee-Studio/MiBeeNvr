@@ -70,3 +70,22 @@ func classifyCloseError(err error) authCloseClass {
 	}
 	return authCloseNone
 }
+
+// closeReasonNodeDraining is the node-lifecycle handshake close (#163): the
+// node answered "I am going away — try another node". It rides status 1013
+// (try again later) and is deliberately NOT auth-class: the server's drain
+// gate sits before JWT verification, so a drain never burns a single-use
+// token and the reconnect ladder keeps its normal retry semantics. It lives
+// below the auth-class tables on purpose — the server's cross-assertion test
+// scans that region for credential verdicts only.
+const closeReasonNodeDraining = "node_draining"
+
+// IsNodeDrainingClose reports whether err is the server's node_draining
+// handshake close — the platform pulled that node from discovery (admin
+// drain, or its expires_at was reached). Clients with a fixed ServerURL
+// should back off and retry; clients with discovery re-run it (the SDK
+// drops its cached answer on this close automatically).
+func IsNodeDrainingClose(err error) bool {
+	_, reason, ok := CloseInfo(err)
+	return ok && reason == closeReasonNodeDraining
+}

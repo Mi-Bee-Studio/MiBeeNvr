@@ -288,6 +288,11 @@ type Session struct {
 	// iceRefreshTimer drives the #132 mid-life TURN credential renewal;
 	// re-armed from every refreshed ICE list.
 	iceRefreshTimer *time.Timer
+	// relayTicketWait is the outstanding relay_ticket request (#143): where
+	// the rebuild ladder is blocked waiting for its answer. Nil when none is
+	// in flight — the ladder is single-flight (#162), so one slot suffices.
+	// Guarded by mu.
+	relayTicketWait *relayTicketWait
 	// Callbacks (set by the user; OnSession/OnDataChannel/OnReject are read
 	// live at event time, so they may be assigned any time before the event
 	// fires — including after Connect() returns via SetOnDataChannel)
@@ -751,6 +756,8 @@ func (s *Session) rebuildRelayClient(cause error) {
 		// drift, and the server must recognize the re-dial as this peer.
 		rc := s.newIdentityClient()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		// #143: a fresh ticket per attempt — the welcome ticket is spent.
+		s.armFreshRelayTicket(ctx, rc, w)
 		err := rc.Connect(ctx, w.RelayURL, w.RelayPubKey)
 		cancel()
 		if cfg.OnRelayConnect != nil {
