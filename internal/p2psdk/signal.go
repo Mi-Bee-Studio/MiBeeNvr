@@ -248,6 +248,7 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 		Role:      sc.cfg.Role,
 		JWT:       helloJWT,
 		Signature: sc.deviceHelloSignature(helloJWT),
+		Caps:      ClientCapabilities(),
 	}
 	helloData, err := Marshal(MessageTypeHello, hello)
 	if err != nil {
@@ -539,6 +540,7 @@ func (sc *signalingClient) helloReconnect(conn *websocket.Conn) bool {
 		Role:      sc.cfg.Role,
 		JWT:       helloJWT,
 		Signature: sc.deviceHelloSignature(helloJWT),
+		Caps:      ClientCapabilities(),
 	}
 	helloData, err := Marshal(MessageTypeHello, hello)
 	if err != nil {
@@ -597,6 +599,7 @@ func (sc *signalingClient) tryResume(conn *websocket.Conn) bool {
 	payload := SyncState{
 		SessionID:   sc.lastSessionID,
 		LastSeenSeq: sc.lastSeq,
+		Caps:        ClientCapabilities(),
 	}
 	data, err := Marshal(MessageTypeSignalResume, payload)
 	if err != nil {
