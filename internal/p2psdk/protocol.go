@@ -87,6 +87,19 @@ const (
 
 // ── Signaling message payloads ──────────────────────────────────────────────
 
+// CapRelayRepoint declares that this client honors relay_url/relay_pub_key
+// overrides on connect_request/connect_accept (cross-node session steering).
+// Without it the server treats the peer as capability-unknown and anchors
+// cross-node sessions on its relay, giving up nearest-node weighting.
+const CapRelayRepoint = "relay_repoint"
+
+// ClientCapabilities returns the capability tokens this SDK advertises.
+// The returned slice is a fresh copy: a caller appending to it must not
+// change what later sessions announce.
+func ClientCapabilities() []string {
+	return []string{CapRelayRepoint}
+}
+
 // Hello is the first message a peer sends after connecting.
 type Hello struct {
 	ProductID string `json:"product_id"`
@@ -98,6 +111,10 @@ type Hello struct {
 	// of the attached JWT), required when the server-side device record has
 	// a registered public key. Empty otherwise.
 	Signature string `json:"signature,omitempty"`
+	// Caps are opt-in capability tokens . Absent = capability-unknown;
+	// the server only applies capability-gated behavior to peers that carry
+	// the token.
+	Caps []string `json:"caps,omitempty"`
 }
 
 // Welcome is sent by the server after a successful hello handshake.
@@ -246,6 +263,9 @@ type Pong struct {
 type SyncState struct {
 	SessionID   string `json:"session_id"`
 	LastSeenSeq uint64 `json:"last_seen_seq"`
+	// Caps echoes the hello capability list : a resumed connection
+	// never re-hellos, so the echo keeps the capability plane alive.
+	Caps []string `json:"caps,omitempty"`
 }
 
 // TelemetryReport is the client→server quality report payload (research
