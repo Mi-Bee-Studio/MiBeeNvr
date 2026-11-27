@@ -1,6 +1,6 @@
 # Adaptive Recording (Motion-Aware)
 
-> Applies to the current MiBeeNvr release
+> Applies to MiBeeNvr v0.15.0
 
 In most surveillance scenes nothing happens 95% of the time — yet continuous recording still writes every frame at full bitrate. **Adaptive recording** lets the NVR drop to "timelapse-grade" sparse keyframe writing while the scene is calm, and instantly resume full-rate recording the moment activity appears, with zero frame loss at the transition. Field-tested on static scenes: **75%–98% less disk usage**, while the first frame of every event still lands in the recording.
 

@@ -1,6 +1,6 @@
 # Web UI Tour
 
-> Applies to the current MiBeeNvr release
+> Applies to MiBeeNvr v0.15.0
 
 The MiBee NVR web interface is organized into five top-level pages plus the single-camera live page. This page is a feature cheat sheet; step-by-step configuration lives in the dedicated guides.
 
@@ -10,7 +10,7 @@ The MiBee NVR web interface is organized into five top-level pages plus the sing
 
 The default page after login — a live multi-camera grid:
 
-- **Grid layout**: the "Configure" button opens the **camera picker** to choose which cameras to show; the **preview count** is selectable at 4 / 6 / 9 / 12 / 16 — tiers above the server HLS budget are greyed out until you raise the HLS preview budget under Settings → Streaming (applies after restart)
+- **Grid layout**: the "Configure" button opens the **camera picker** to choose which cameras to show (4 by default, with 6/9/12/16 tiers); tiers above the server HLS budget are greyed out until you raise the HLS preview budget under Settings → Streaming (applies after restart)
 - **Header quality switch**: a **Smooth / HD** toggle for the whole grid — "Smooth" rides the camera's [sub-stream](sub-stream.md) (default), slashing bandwidth and decode load when viewing many cameras at once; cameras without one silently fall back to the main stream
 - **Per tile**: camera name, live badge, playback protocol (WebCodecs / MJPEG, etc.), and a **health score**
 - **Tile controls**: unmute (cameras with audio) and fullscreen
@@ -26,6 +26,8 @@ Above 4 previews the configure panel gains a **photo wall** switch: the first ti
 - **Layout**: template chips render live mini previews at the current camera count — featured tile in a corner / center / dual / triple; templates needing more cameras are greyed out
 - **Rotation**: rotate the featured tile every 30s / 60s / 300s; hovering the featured tile pauses it; "Off" is static
 - Rotation pauses automatically while any tile is expanded or the configure panel is open; the preference is stored per browser
+
+In HD mode above 4 previews, only featured tiles use the main stream; the rest stay on sub-streams. Refreshes suspend while the grid is hidden and resume on return; `/flow` polling drops to half frequency, and route keep-alive suspension further reduces idle load.
 
 > H.265 cameras play in the browser via WASM decoding — no HTTPS or plugins needed; see [Streaming Protocol Selection](streaming-protocol-selection.md).
 

@@ -57,7 +57,7 @@ ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认
 先安装 [`fnpack`](https://github.com/ckcoding/fnnas-docs/blob/main/docs/cli/fnpack.md)，然后：
 
 ```bash
-./deploy/fnos/build.sh 0.13.0              # 离线包：需要本地已构建双架构镜像
+./deploy/fnos/build.sh 0.15.0              # 离线包：需要本地已构建双架构镜像
 ./deploy/fnos/build.sh --online 0.13.0    # 在线包：不含镜像，无需 docker
 ```
 

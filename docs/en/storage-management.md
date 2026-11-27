@@ -1,6 +1,6 @@
 # Storage Management & Recording Migration
 
-> Applies to the current MiBeeNvr release
+> Applies to MiBeeNvr v0.15.0
 
 Where recordings live, how to swap disks, and how to move history — all **runtime operations, no restart required**. The database is decoupled from the recording root (SQLite stays on the data volume), so switching storage never walks off with your index.
 

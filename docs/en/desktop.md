@@ -1,6 +1,6 @@
 # Desktop Edition (Windows / macOS)
 
-> Applies to MiBeeNvr v0.13.0 · new platform, feature parity with Docker / bare-metal Linux
+> Applies to MiBeeNvr v0.15.0 · new platform, feature parity with Docker / bare-metal Linux
 
 Starting with v0.13.0, MiBee NVR ships **desktop editions for Windows and macOS**: single-file installers, a system tray (Windows) / menubar helper (macOS), and a passwordless local-trust model that works out of the box. They turn an always-on Windows mini PC or a Mac mini into a home NVR — no Docker, no command line.
 
@@ -8,7 +8,7 @@ Starting with v0.13.0, MiBee NVR ships **desktop editions for Windows and macOS*
 
 ### Windows
 
-1. Download `MiBeeNVR-Setup-v0.13.0-windows-amd64.exe` from [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) (the installer *is* the server itself — a single file)
+1. Download `MiBeeNVR-Setup-v0.15.0-windows-amd64.exe` from [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) (the installer *is* the server itself — a single file)
 2. Double-click to run — it installs, starts, and opens the browser into the first-run wizard in one step
 3. After installation the MiBee icon appears in the system tray: Open Web UI / Change Password / Listen Address / Quit
 4. Uninstall: the MiBee NVR entry in Windows Settings → Apps (or the Control Panel); data is kept by default — tick the delete option or run `mibee-nvr uninstall --purge` to remove it as well
@@ -17,7 +17,7 @@ Starting with v0.13.0, MiBee NVR ships **desktop editions for Windows and macOS*
 
 ### macOS
 
-1. Download `MiBeeNVR-v0.13.0-macOS-universal.dmg` (universal arm64 + amd64)
+1. Download `MiBeeNVR-v0.15.0-macOS-universal.dmg` (universal arm64 + amd64)
 2. Open the DMG and drag **MiBeeNVR.app** to Applications
 3. Double-click to run for the first time: it installs the service and opens the first-run wizard; the MiBee helper icon appears in the menubar
 4. The menubar helper offers: Open Web UI / Change Password / Change Listen Address / Quit

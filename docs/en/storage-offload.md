@@ -1,6 +1,6 @@
 # Object-Storage Offload (S3 Cold Backup)
 
-> Applies to MiBeeNvr v0.13.0 · feature issue [#874](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/874), disabled by default
+> Applies to MiBeeNvr v0.15.0 · feature issue [#874](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/874), disabled by default
 
 After a rolling merge finishes writing a recording, the NVR can **upload it asynchronously** to S3-compatible object storage for cold backup / archiving: local recording behavior stays completely unchanged, and once an upload has succeeded and been verified with a remote `HeadObject`, you can optionally evict the local copy to free disk. Good fits:
 

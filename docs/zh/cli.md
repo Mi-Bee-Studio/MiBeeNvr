@@ -1,6 +1,6 @@
 # CLI 用户手册
 
-> 适用于当前版本（MiBeeNvr） · 命令名 `mibee-nvr`（预编译包可能带架构后缀，如 `mibee-nvr-amd64`）
+> 适用于 MiBeeNvr v0.15.0 · 命令名 `mibee-nvr`（预编译包可能带架构后缀，如 `mibee-nvr-amd64`）
 
 MiBee NVR 是「单二进制 + 子命令」形态：**不带子命令直接运行即启动服务器**，带子命令则执行对应的管理工具后退出。
 
@@ -363,7 +363,7 @@ mibee-nvr update --check
 
 # 手动升级到最新稳定版（需要 sudo）
 sudo mibee-nvr update
-sudo mibee-nvr update --version v0.13.0
+sudo mibee-nvr update --version v0.15.0
 
 # root helper 入口（update 服务的 ExecStart；请求文件由应用写入、只消费一次，任意结果都会被删除）
 mibee-nvr update --apply-request /var/lib/mibee-nvr/update-request.json
