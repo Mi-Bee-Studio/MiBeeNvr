@@ -78,6 +78,7 @@ MiBee Nvr v0.11.0 采用 **AGPL-3.0** 开源许可证。
 
 ## 获取帮助
 
+- **视频教程**：[B 站系列 · 3 集起步](video-tutorials.md)——从空机器到第一路画面
 - **GitHub Issues**：[MiBeeNvr Issues](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues)
 - **讨论区**：[MiBeeNvr Discussions](https://github.com/Mi-Bee-Studio/MiBeeNvr/discussions)
 - **升级指南**：[升级指南](upgrade-guide.md)
