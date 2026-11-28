@@ -1,6 +1,6 @@
 # NAS 部署
 
-> 适用于当前版本（MiBeeNvr）
+> 适用于 MiBeeNvr v0.15.0
 
 MiBee NVR 提供 6 大 NAS 系统的安装支持，通过一键安装脚本或套件管理器完成部署。
 
@@ -128,8 +128,8 @@ MiBee NVR 为 fnOS 提供官方 `.fpk` 应用包，在应用中心手动安装�
 
 安装步骤：
 
-1. 从发布页下载 `.fpk` 文件（`mibee-nvr-fnos-<版本>.fpk` 或在线版 `*-online-*.fpk`）
-2. fnOS 桌面 →「**应用中心**」→「**手动安装**」，上传 `.fpk`（也可 SSH 执行 `sudo appcenter-cli install-fpk mibee-nvr-fnos-<版本>.fpk`）
+1. 从 [v0.15.0 发布页](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/tag/v0.15.0)下载 `mibee-nvr-fnos-0.15.0.fpk`（离线版）或 `mibee-nvr-fnos-online-0.15.0.fpk`（在线版）
+2. fnOS 桌面 →「**应用中心**」→「**手动安装**」，上传 `.fpk`（也可 SSH 执行 `sudo appcenter-cli install-fpk mibee-nvr-fnos-0.15.0.fpk`）
 3. 按安装向导选择存储卷并启动
 
 ![应用中心 · 手动安装](images/fnos-appcenter-manual.webp)

@@ -1,6 +1,6 @@
 # CLI Reference
 
-> Applies to the current MiBeeNvr release · command name `mibee-nvr` (prebuilt bundles may carry an arch suffix, e.g. `mibee-nvr-amd64`)
+> Applies to MiBeeNvr v0.15.0 · command name `mibee-nvr` (prebuilt bundles may carry an arch suffix, e.g. `mibee-nvr-amd64`)
 
 MiBee NVR follows a "single binary + subcommands" design: **running it without a subcommand starts the server**, while subcommands run an administrative tool and exit.
 
@@ -363,7 +363,7 @@ mibee-nvr update --check
 
 # manual upgrade to the latest stable (requires sudo)
 sudo mibee-nvr update
-sudo mibee-nvr update --version v0.13.0
+sudo mibee-nvr update --version v0.15.0
 
 # root-helper entry (ExecStart of the update service; the request file is
 # written by the app and consumed exactly once — removed on ANY outcome)

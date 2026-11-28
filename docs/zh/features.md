@@ -1,6 +1,6 @@
 # 功能总览
 
-> 适用于当前版本（MiBeeNvr）
+> 适用于 MiBeeNvr v0.15.0
 
 一页看全 MiBee NVR 的全部能力。每一节都附上对应的专题文档链接——本文是地图，细节请进对应的"景点"。
 
@@ -19,9 +19,7 @@
 | HTTP JPEG / MJPEG | ESP32 等低功耗自制摄像头 | 快照流与 MJPEG 流，搭配 MiBeeCam 固件 |
 | 树莓派摄像头 | USB / CSI 摄像头 | 通过 RTSP 服务（rpi-cam）接入 |
 
-零配置发现：ONVIF WS-Discovery 自动扫描 + mDNS/DNS-SD 局域网服务通告 + UDP 广播应答——同一网络内打开网页就能看到 NVR 和摄像头。
-
-零接触接入：仍在厂商默认网段的相机（海康系 `192.168.1.64`）由 NVR 自己发现、改网、纳管——见[零接触接入](onboarding.md)，默认关闭。
+零配置发现：ONVIF WS-Discovery 自动扫描 + mDNS/DNS-SD 局域网服务通告 + UDP 广播应答——同一网络内打开网页就能看到 NVR 和摄像头。v0.15.0 另提供**零接触相机引导**：对仍在出厂默认网段的相机临时启用辅助地址，先探测、经 ONVIF 或海康 ISAPI 改写网络配置，再按序列号定位纳管；需 Linux `CAP_NET_ADMIN`，同一广播域，且设备 HTTP 80 端口可达。功能默认关闭，启用与操作步骤见[零接触相机引导](#零接触相机引导)。
 
 ## 直播观看
 
@@ -72,9 +70,9 @@ SIP 摄像头/平台直接 REGISTER 到 NVR，以普通摄像头形式出现在�
 
 - **浏览器端 AI 检测**：ONNX Runtime Web（WebGPU → WASM SIMD 回退），YOLO11 模型在浏览器推理——服务器零负载，老旧 NVR 主机也能跑
 - **ROI 区域**：划出入口/通道等关键区域，只对区域内目标报警；置信度、跳帧率、类别过滤全可调（见 [AI 调参指南](ai-detection-tuning.md)）
-- **MiBeeVision 集成**：可接入外部 AI 后端（v0.13 起支持多实例路由 `vision.instances` + 推送熔断自动退避），NVR 主动推送录像段、掉线自动补偿重推；AI 事件快照端点。官方 **MiBeeVision Lite** 二进制已在 NVR 仓库免费分发（独立版本线；Lite 为单摄像头、CPU 推理、Linux x86_64/ARM64），无需自建 AI 后端
+- **MiBeeVision 集成**：可接入外部 AI 后端（v0.13 起支持多实例路由 `vision.instances` + 推送熔断自动退避），NVR 主动推送录像段、掉线自动补偿重推；AI 事件快照端点。官方 **MiBeeVision Lite** 二进制通过「发布会」免费分发（[Lite v0.1.0](https://github.com/mickeyzzc/releases/releases/tag/mibee-vision-v0.1.0)，独立版本线；单摄像头、CPU 推理、Linux x86_64/ARM64），无需自建 AI 后端
 - **相机侧移动侦测**：ONVIF MotionAlarm 事件直接作为录像触发源（`motion_source: camera:onvif`，见 [ONVIF 指南](onvif-guide.md)）——侦测算力下放给相机，NVR 零解码开销
-- **热成像 / 双光谱相机**：热成像通道作为独立相机条目连续录制（默认不推送 AI 分析）；双光谱设备可用「主码流 Profile」覆盖指定热通道，GB28181 目录携带 PhotoelectricImagingType 的通道自动标注；设备侧温度告警联动录制 + 取证快照（ONVIF RadiometryAlarm 与国标告警 NOTIFY 两条路径），见 [ONVIF 指南](onvif-guide.md)
+- **热成像 / 双光谱相机**：热成像通道作为独立相机条目连续录制（默认不推送 AI 分析）；双光谱设备可用 `spectrum_group` 配对可见光与热通道并双窗同看，用「主码流 Profile」覆盖指定热通道，GB28181 目录携带 PhotoelectricImagingType 的通道自动标注；提供测温点、最高/最低温角标、悬停读数、越限高亮与分钟级温度历史回放；设备侧温度告警联动录制 + 取证快照（ONVIF RadiometryAlarm 与国标告警 NOTIFY 两条路径），见[摄像头指南](camera-guide.md#热成像--双光谱摄像头)与 [ONVIF 指南](onvif-guide.md)
 - **健康监控**：多层级摄像头健康检测、自动补救、掉线黑名单、IP 漂移自愈（按 ONVIF 序列号重新发现）
 - **SSE 实时事件**：摄像头状态、健康事件、录像段完成全部实时推送
 
@@ -106,6 +104,7 @@ SIP 摄像头/平台直接 REGISTER 到 NVR，以普通摄像头形式出现在�
 - **[DLNA 媒体服务器](dlna.md)**：电视/局域网播放器经 SSDP 自动发现 NVR,按 摄像头 → 日期 → 录像 浏览(默认关闭,仅内网网卡)
 - **[Home Assistant 集成](home-assistant.md)**：官方定制集成随包发布（mDNS 自动发现 + 按相机生成实体 / 开关）；也可用内置 RTSP 输出 + MQTT 纯原生拼装
 - **Prometheus 指标**：300+ 指标族，`/api/metrics` 抓取
+- **OpenTelemetry**：可选的 OTLP/HTTP 分布式追踪与远程日志外发，支持请求、录制器、合并/清理、GB28181 会话与 Vision 推送，日志可携带 `otel_trace_id` / `otel_span_id` 与链路互跳，见[可观测性](observability.md)
 - **REST API**：全部功能可编程，支持 API Key（`mbv_` 前缀）与 BasicAuth 双认证
 
 ## 部署与分发
@@ -144,7 +143,28 @@ timeline
     v0.10 : H.265 WASM 直播 : Timelapse v3 : 认证现代化 : 多 NAS 分发
     v0.11 : GB/T 28181 国标接入 : 连续回放时间轴 : 局域网发现 : 自适应录制 : 子码流按需 : 按相机存储
     v0.13 : 对象存储冷备 : 分层录制+像素域门控 : 桌面版 : 裸机自动更新 : I/O 预算调度
+    v0.15 : 热成像与双光谱 : 测温与温度回放 : 监控网格与照片墙 : 零接触相机引导 : OpenTelemetry
 ```
+
+## 零接触相机引导
+
+零接触引导面向仍在厂商出厂默认网段、无法从 NVR 网段直接访问的相机。NVR 在主网卡临时挂载该网段的辅助地址，探测设备后改写网络配置，再在新地址按序列号定位并纳管；扫描或纳管结束（包括失败、超时）都会摘除辅助地址。
+
+1. 在 `mibee-nvr.yaml` 开启并指定出厂网段：
+
+   ```yaml
+   camera_onboarding:
+     enabled: true                  # 默认关闭；会改写设备网络配置
+     default_subnet: "192.168.1.0/24"
+     target_dhcp: true              # 或改 false 并填写 target_static_ip
+     target_static_ip: "192.168.10.84"
+   ```
+
+2. 确认 NVR 以 Linux 运行并具备 `CAP_NET_ADMIN`，默认网段与 NVR 处于同一广播域，相机 HTTP 80 端口可达。
+3. 调用 `POST /api/onboarding/scan` 扫描候选设备，再用 `POST /api/onboarding/adopt` 选择目标地址并提交设备凭据。纳管支持逐台覆盖 `mode`、`static_ip`、`prefix_len`；静态模式推荐。
+4. 在摄像头页确认相机已出现在新地址，录像行为与手工添加一致。
+
+扫描会区分「已激活」「出厂未激活」与「需要认证」；未激活设备需先在相机 Web UI 或厂商工具中激活。ONVIF 拒绝写网络配置时，海康静态模式自动回退 ISAPI。并发扫描/纳管会返回 `409`。DHCP 模式找不到唯一序列号时不会猜测，改用静态模式重试。完整端点见产品仓库 `docs/zh/api/onboarding.md`（v0.15.0）。
 
 ## 性能与可靠性
 

@@ -1,6 +1,6 @@
 # 桌面版（Windows / macOS）
 
-> 适用于当前版本（MiBeeNvr） · 全新平台形态，与 Docker / 裸机 Linux 版功能一致
+> 适用于 MiBeeNvr v0.15.0 · 全新平台形态，与 Docker / 裸机 Linux 版功能一致
 
 v0.13.0 起 MiBee NVR 提供 **Windows 与 macOS 桌面版**：单文件安装器、系统托盘（Windows）/ 菜单栏助手（macOS）、开箱即用的本机免密信任模型。适合把一台常开的 Windows 小主机或 Mac mini 变成家用 NVR，无需 Docker 与命令行。
 
@@ -8,7 +8,7 @@ v0.13.0 起 MiBee NVR 提供 **Windows 与 macOS 桌面版**：单文件安装�
 
 ### Windows
 
-1. 从 [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) 下载 `MiBeeNVR-Setup-v0.13.0-windows-amd64.exe`（安装器即服务器本体，单文件）
+1. 从 [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) 下载 `MiBeeNVR-Setup-v0.15.0-windows-amd64.exe`（安装器即服务器本体，单文件）
 2. 双击运行——安装、启动、自动打开浏览器进入首跑向导，一步完成
 3. 安装后系统托盘出现 MiBee 图标：打开 Web 界面 / 修改密码 / 监听地址 / 退出
 4. 卸载：Windows「设置 → 应用」（或控制面板）中的 MiBee NVR 条目；数据默认保留，勾选删除或 `mibee-nvr uninstall --purge` 一并清除
@@ -17,7 +17,7 @@ v0.13.0 起 MiBee NVR 提供 **Windows 与 macOS 桌面版**：单文件安装�
 
 ### macOS
 
-1. 下载 `MiBeeNVR-v0.13.0-macOS-universal.dmg`（arm64 + amd64 通用）
+1. 下载 `MiBeeNVR-v0.15.0-macOS-universal.dmg`（arm64 + amd64 通用）
 2. 打开 DMG，把 **MiBeeNVR.app** 拖到「应用程序」
 3. 首次双击运行：安装服务并打开首跑向导；菜单栏出现 MiBee 助手图标
 4. 菜单栏助手提供：打开 Web 界面 / 修改密码 / 修改监听地址 / 退出

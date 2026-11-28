@@ -1,6 +1,6 @@
 # 对象存储冷备（S3 Offload）
 
-> 适用于当前版本（MiBeeNvr） · 特性 issue [#874](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/874)，默认关闭
+> 适用于 MiBeeNvr v0.15.0 · 特性 issue [#874](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/874)，默认关闭
 
 把合并完成（rolling 合并落盘）后的录像**异步上传**到 S3 兼容对象存储做冷备/归档：本地录像行为完全不变，上传成功并经远端 `HeadObject` 校验后，可选择逐出本地副本释放磁盘。适合：
 

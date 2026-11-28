@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install
 Install a specific version:
 
 ```bash
-sudo ./install.sh --version v0.13.0
+sudo ./install.sh --version v0.15.0
 ```
 
 Uninstall (preserves recordings in `/var/lib/mibee-nvr`):
@@ -221,8 +221,8 @@ docker inspect --format='{{.State.Health.Status}}' mibee-nvr
 **Run a specific version:**
 
 ```bash
-docker pull ghcr.io/mi-bee-studio/mibeenvr:0.13.0
-docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:0.13.0
+docker pull ghcr.io/mi-bee-studio/mibeenvr:0.15.0
+docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:0.15.0
 ```
 
 **Stop and remove:**
@@ -513,7 +513,7 @@ For Docker deployments — manual `docker compose pull && up -d`, optional Watch
 ### Using install.sh (Recommended)
 
 ```bash
-sudo ./install.sh --version v0.13.0
+sudo ./install.sh --version v0.15.0
 ```
 
 The script stops the service, replaces the binary, and restarts automatically. Config and recordings are preserved.

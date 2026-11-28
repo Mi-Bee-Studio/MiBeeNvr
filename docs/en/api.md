@@ -1,6 +1,6 @@
 # API Overview
 
-> Applies to the current MiBeeNvr release · full endpoint docs live in the repo at [docs/en/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/en/api)
+> Applies to MiBeeNvr v0.15.0 · full endpoint docs live in the repo at [docs/en/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/en/api)
 
 Everything MiBee NVR does is drivable over its REST API (the web UI itself is a consumer of it), plus an SSE event stream. This page is an auth + core-endpoint cheat sheet.
 

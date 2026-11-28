@@ -1,6 +1,6 @@
 # Product Introduction
 
-> Applies to the current MiBeeNvr release
+> Applies to MiBeeNvr v0.15.0
 
 MiBee NVR is a lightweight, self-hosted Network Video Recorder written in Go. It captures IP camera video streams as MP4 segments and saves them to disk, providing a modern web interface for live viewing, camera management, and recorded footage access.
 

@@ -1,6 +1,6 @@
 # NAS Deployment
 
-> Applies to the current MiBeeNvr release
+> Applies to MiBeeNvr v0.15.0
 
 MiBee NVR supports 6 major NAS platforms, deployable through one-click install scripts or package managers.
 
@@ -130,8 +130,8 @@ Every release publishes two package variants on the [releases page](https://gith
 
 Install steps:
 
-1. Download the `.fpk` file from the releases page (`mibee-nvr-fnos-<ver>.fpk`, or the online `*-online-*.fpk`)
-2. fnOS desktop → **App Center** → **Manual Install**, and upload the `.fpk` (or via SSH: `sudo appcenter-cli install-fpk mibee-nvr-fnos-<ver>.fpk`)
+1. Download `mibee-nvr-fnos-0.15.0.fpk` (offline) or `mibee-nvr-fnos-online-0.15.0.fpk` (online) from the [v0.15.0 release page](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/tag/v0.15.0)
+2. fnOS desktop → **App Center** → **Manual Install**, and upload the `.fpk` (or via SSH: `sudo appcenter-cli install-fpk mibee-nvr-fnos-0.15.0.fpk`)
 3. Follow the install wizard to choose a storage volume and start the app
 
 ![App Center — Manual Install](../zh/images/fnos-appcenter-manual.webp)
